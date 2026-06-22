@@ -1,0 +1,770 @@
+// =============================================================================
+//  Market Profile Pereira — Fase 1
+//  Indicador ATAS SDK 10 | Modo Automático por sessão/horário
+//  Fase 2 (modo Manual / drawing tool) ainda não implementada.
+//
+//  Marcações ⚠ VERIFICAR: pontos da API do SDK 10 que não foi possível
+//  confirmar com total certeza — a lógica à volta está correcta;
+//  o que pode precisar de ajuste é apenas o nome exacto do método/propriedade.
+// =============================================================================
+
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Linq;
+using ATAS.Indicators;
+using OFT.Rendering.Context;   // ⚠ VERIFICAR — namespace exacto em SDK 10
+using OFT.Rendering.Settings;  // ⚠ VERIFICAR — namespace onde vive DrawingLayouts
+
+namespace ATAS.Indicators.Custom
+{
+    // -------------------------------------------------------------------------
+    //  Enums públicos (visíveis no editor de propriedades do ATAS)
+    // -------------------------------------------------------------------------
+
+    public enum PositionMode  { Manual, Automatico }
+
+    public enum ProfileType   { Volume, VolumeDelta }
+
+    public enum SessionPreset
+    {
+        Asia,
+        London,
+        NewYork,
+        NYOpen,
+        LondonNYOverlap,
+        Custom
+    }
+
+    public enum VahValModo { Linha, Zona }
+
+    // =========================================================================
+    //  Classe principal
+    // =========================================================================
+
+    [DisplayName("Market Profile Pereira")]
+    public class MarketProfilePereira : Indicator
+    {
+        // =====================================================================
+        //  Tipos privados internos
+        // =====================================================================
+
+        private sealed class PriceLevelData
+        {
+            public decimal TotalVolume;
+            public decimal BidVolume;
+            public decimal AskVolume;
+            public decimal Delta => AskVolume - BidVolume;
+        }
+
+        private sealed class ProfileSession
+        {
+            public DateTime StartTime;
+            public int      StartBar;
+            public int      EndBar;
+
+            public readonly SortedDictionary<decimal, PriceLevelData> PriceLevels
+                = new SortedDictionary<decimal, PriceLevelData>();
+
+            public decimal POC;
+            public decimal VAH;
+            public decimal VAL;
+            public readonly List<decimal> SecondaryPOCs = new List<decimal>();
+
+            public decimal MaxVolume;
+            public decimal TotalVolume;
+            public bool    MetricsValid;
+
+            // Snapshot da contribuição da última candle (para recalc no tick ao vivo)
+            public Dictionary<decimal, PriceLevelData> LastBarContrib;
+            public int LastBarAdded = -1;
+        }
+
+        // =====================================================================
+        //  Propriedades / Settings
+        // =====================================================================
+
+        // --- Profile ---
+
+        [Display(Name = "Position Mode",
+                 Description = "Automatico = sessão por horário. Manual = Fase 2 (ainda não implementado).",
+                 GroupName = "Profile", Order = 0)]
+        public PositionMode PositionMode { get; set; } = PositionMode.Automatico;
+
+        [Display(Name = "Profile Type",
+                 Description = "Volume: barras de volume total. VolumeDelta: volume (direita) + delta bid/ask (esquerda).",
+                 GroupName = "Profile", Order = 1)]
+        public ProfileType ProfileType { get; set; } = ProfileType.Volume;
+
+        [Display(Name = "Largura máxima (% do range da sessão)",
+                 Description = "Percentagem do range X da sessão que as barras do perfil podem ocupar.",
+                 GroupName = "Profile", Order = 2)]
+        public int MaxWidthPercent { get; set; } = 70;
+
+        // --- Sessions ---
+
+        [Display(Name = "Sessão",
+                 GroupName = "Sessions", Order = 10)]
+        public SessionPreset Session { get; set; } = SessionPreset.NewYork;
+
+        [Display(Name = "Custom Start (HH:mm)",
+                 Description = "Hora de início da sessão custom, em UTC. Formato HH:mm.",
+                 GroupName = "Sessions", Order = 11)]
+        public string CustomStart { get; set; } = "13:30";
+
+        [Display(Name = "Custom End (HH:mm)",
+                 Description = "Hora de fim da sessão custom, em UTC. Formato HH:mm.",
+                 GroupName = "Sessions", Order = 12)]
+        public string CustomEnd { get; set; } = "20:00";
+
+        [Display(Name = "Sessões a mostrar",
+                 Description = "Número de sessões históricas a desenhar (+ a sessão actual).",
+                 GroupName = "Sessions", Order = 13)]
+        public int SessionsToShow { get; set; } = 3;
+
+        // --- Value Area ---
+
+        [Display(Name = "Value Area %",
+                 GroupName = "Value Area", Order = 20)]
+        public decimal ValueAreaPercent { get; set; } = 70m;
+
+        [Display(Name = "VAH / VAL modo",
+                 Description = "Linha = linha horizontal tracejada. Zona = rectângulo semi-transparente.",
+                 GroupName = "Value Area", Order = 21)]
+        public VahValModo VahValMode { get; set; } = VahValModo.Linha;
+
+        [Display(Name = "VAH — cor",
+                 GroupName = "Value Area", Order = 22)]
+        public Color CorVAH { get; set; } = Color.FromArgb(255, 220, 50, 50);
+
+        [Display(Name = "VAL — cor",
+                 GroupName = "Value Area", Order = 23)]
+        public Color CorVAL { get; set; } = Color.FromArgb(255, 50, 180, 220);
+
+        [Display(Name = "Zona — opacidade (0-255)",
+                 Description = "Alpha do preenchimento quando VAH/VAL estão em modo Zona.",
+                 GroupName = "Value Area", Order = 24)]
+        public int ZoneAlpha { get; set; } = 40;
+
+        // --- POC ---
+
+        [Display(Name = "POC — cor",
+                 GroupName = "POC", Order = 30)]
+        public Color CorPOC { get; set; } = Color.FromArgb(255, 255, 165, 0);
+
+        [Display(Name = "Marcar POCs secundários",
+                 GroupName = "POC", Order = 31)]
+        public bool MarcarPOCsSecundarios { get; set; } = true;
+
+        [Display(Name = "POC secundário — volume mínimo (%)",
+                 Description = "Pico local só é marcado como POC secundário se tiver pelo menos X% do volume do POC principal.",
+                 GroupName = "POC", Order = 32)]
+        public int SecondaryPOCThresholdPct { get; set; } = 60;
+
+        [Display(Name = "POC secundário — cor",
+                 GroupName = "POC", Order = 33)]
+        public Color CorPOCSecundario { get; set; } = Color.FromArgb(255, 180, 80, 255);
+
+        // --- Colors — Volume ---
+
+        [Display(Name = "Volume dentro da Value Area",
+                 GroupName = "Colors — Volume", Order = 40)]
+        public Color CorVolumePerfil { get; set; } = Color.FromArgb(200, 255, 100, 0);
+
+        [Display(Name = "Volume fora da Value Area",
+                 GroupName = "Colors — Volume", Order = 41)]
+        public Color CorForaValueArea { get; set; } = Color.FromArgb(200, 255, 220, 0);
+
+        // --- Colors — Delta ---
+
+        [Display(Name = "Delta negativo (dominância Bid)",
+                 GroupName = "Colors — Delta", Order = 50)]
+        public Color CorBid { get; set; } = Color.FromArgb(200, 130, 0, 210);
+
+        [Display(Name = "Delta positivo (dominância Ask)",
+                 GroupName = "Colors — Delta", Order = 51)]
+        public Color CorAsk { get; set; } = Color.FromArgb(200, 0, 200, 60);
+
+        // =====================================================================
+        //  Estado interno
+        // =====================================================================
+
+        private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
+        private          ProfileSession       _currentSession;
+
+        // =====================================================================
+        //  Construtor
+        // =====================================================================
+
+        public MarketProfilePereira()
+        {
+            EnableCustomDrawing = true;  // ⚠ VERIFICAR — nome exacto da propriedade em SDK 10
+            DenyToChangePanel   = true;  // ⚠ VERIFICAR — mantém o indicador no painel de preços
+        }
+
+        // =====================================================================
+        //  Lifecycle
+        // =====================================================================
+
+        protected override void OnInitialize()
+        {
+            _sessions.Clear();
+            _currentSession = null;
+        }
+
+        protected override void OnCalculate(int bar, decimal value)
+        {
+            // Reset completo na primeira candle (inclui re-cálculo por mudança de settings)
+            if (bar == 0)
+            {
+                _sessions.Clear();
+                _currentSession = null;
+            }
+
+            var candle = GetCandle(bar);
+            if (candle == null) return;
+
+            var (sStart, sEnd) = GetSessionTimes();
+
+            // ⚠ VERIFICAR — candle.Time: confirmar se é UTC ou hora local da exchange.
+            // Se o ATAS devolver hora local, substituir por candle.Time.ToUniversalTime()
+            // ou ajustar os horários das sessões para a timezone correcta.
+            DateTime t        = candle.Time;
+            bool     inSess   = IsInSession(t, sStart, sEnd);
+            bool     isLive   = (bar == CurrentBar - 1);
+
+            if (inSess)
+            {
+                DateTime anchor = GetSessionAnchorDate(t, sStart, sEnd);
+
+                bool needNew = _currentSession == null
+                    || GetSessionAnchorDate(_currentSession.StartTime, sStart, sEnd) != anchor;
+
+                if (needNew)
+                {
+                    ArchiveCurrentSession();
+                    _currentSession = new ProfileSession
+                    {
+                        StartTime    = t,
+                        StartBar     = bar,
+                        EndBar       = bar,
+                        LastBarAdded = -1
+                    };
+                }
+
+                _currentSession.EndBar = bar;
+
+                if (bar > _currentSession.LastBarAdded)
+                {
+                    // Nova candle fechada: acumular de forma incremental
+                    AddBarToSession(_currentSession, bar);
+                    _currentSession.LastBarAdded = bar;
+                    _currentSession.MetricsValid = false;
+                }
+                else if (isLive)
+                {
+                    // Tick ao vivo na candle actual: retirar contribuição anterior e re-adicionar
+                    SubtractContrib(_currentSession, _currentSession.LastBarContrib);
+                    AddBarToSession(_currentSession, bar);
+                    _currentSession.MetricsValid = false;
+                }
+
+                // Manter métricas actualizadas para o render
+                if (isLive && !_currentSession.MetricsValid)
+                    ComputeMetrics(_currentSession);
+            }
+            else
+            {
+                // Esta candle está fora da sessão — fechar sessão actual se existir
+                ArchiveCurrentSession();
+                _currentSession = null;
+            }
+        }
+
+        // =====================================================================
+        //  Gestão de sessões
+        // =====================================================================
+
+        private void ArchiveCurrentSession()
+        {
+            if (_currentSession == null) return;
+            if (!_currentSession.MetricsValid)
+                ComputeMetrics(_currentSession);
+            if (_currentSession.PriceLevels.Count > 0)
+            {
+                _sessions.Add(_currentSession);
+                // Manter apenas as N mais recentes
+                int max = Math.Max(1, SessionsToShow);
+                while (_sessions.Count > max)
+                    _sessions.RemoveAt(0);
+            }
+            _currentSession = null;
+        }
+
+        private (TimeSpan start, TimeSpan end) GetSessionTimes()
+        {
+            switch (Session)
+            {
+                case SessionPreset.Asia:
+                    return (new TimeSpan(0, 0, 0), new TimeSpan(9, 0, 0));
+                case SessionPreset.London:
+                    return (new TimeSpan(7, 0, 0), new TimeSpan(16, 0, 0));
+                case SessionPreset.NewYork:
+                    return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
+                case SessionPreset.NYOpen:
+                    return (new TimeSpan(13, 30, 0), new TimeSpan(15, 0, 0));
+                case SessionPreset.LondonNYOverlap:
+                    return (new TimeSpan(12, 0, 0), new TimeSpan(16, 30, 0));
+                case SessionPreset.Custom:
+                    if (TimeSpan.TryParse(CustomStart, out var cs) &&
+                        TimeSpan.TryParse(CustomEnd,   out var ce))
+                        return (cs, ce);
+                    // fallback se o parse falhar
+                    return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
+                default:
+                    return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
+            }
+        }
+
+        private static bool IsInSession(DateTime time, TimeSpan start, TimeSpan end)
+        {
+            TimeSpan t = time.TimeOfDay;
+            // Sessão normal (não atravessa meia-noite)
+            if (start <= end) return t >= start && t < end;
+            // Sessão que atravessa meia-noite (ex: Ásia 22:00 → 06:00)
+            return t >= start || t < end;
+        }
+
+        // Retorna a "data âncora" que agrupa candles na mesma sessão.
+        // Para sessões que atravessam meia-noite, candles com hora < end
+        // pertencem à sessão do dia anterior.
+        private static DateTime GetSessionAnchorDate(DateTime time, TimeSpan start, TimeSpan end)
+        {
+            if (start > end && time.TimeOfDay < end)
+                return time.Date.AddDays(-1);
+            return time.Date;
+        }
+
+        // =====================================================================
+        //  Cálculo do perfil (acumulação incremental)
+        // =====================================================================
+
+        private void AddBarToSession(ProfileSession session, int bar)
+        {
+            var candle = GetCandle(bar);
+            if (candle == null) return;
+
+            decimal tick = InstrumentInfo.TickSize;
+            if (tick <= 0) tick = 0.01m;
+
+            var contrib = new Dictionary<decimal, PriceLevelData>();
+
+            decimal priceLo = RoundToTick(candle.Low,  tick);
+            decimal priceHi = RoundToTick(candle.High, tick);
+
+            for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
+            {
+                // ⚠ VERIFICAR ——————————————————————————————————————————————————
+                // API do DataProvider para volume bid/ask por price level em SDK 10.
+                //
+                // Opção A (mais provável — API directa):
+                //   decimal ask = DataProvider.GetAskVolume(bar, p);
+                //   decimal bid = DataProvider.GetBidVolume(bar, p);
+                //
+                // Opção B (via cluster/footprint):
+                //   var cl  = DataProvider.GetCandleCluster(bar);
+                //   decimal ask = cl?.GetAskVolume(p) ?? 0m;
+                //   decimal bid = cl?.GetBidVolume(p) ?? 0m;
+                //
+                // Substitui as duas linhas abaixo pelo par correcto após verificar
+                // a interface IDataProvider no SDK 10:
+                decimal ask = DataProvider.GetAskVolume(bar, p); // ⚠ VERIFICAR
+                decimal bid = DataProvider.GetBidVolume(bar, p); // ⚠ VERIFICAR
+                // —————————————————————————————————————————————————————————————
+
+                decimal total = ask + bid;
+                if (total <= 0) continue;
+
+                // Acumular no perfil da sessão
+                if (!session.PriceLevels.TryGetValue(p, out var lvl))
+                {
+                    lvl = new PriceLevelData();
+                    session.PriceLevels[p] = lvl;
+                }
+                lvl.AskVolume   += ask;
+                lvl.BidVolume   += bid;
+                lvl.TotalVolume += total;
+
+                // Registar no snapshot desta candle
+                if (!contrib.TryGetValue(p, out var snap))
+                {
+                    snap = new PriceLevelData();
+                    contrib[p] = snap;
+                }
+                snap.AskVolume   += ask;
+                snap.BidVolume   += bid;
+                snap.TotalVolume += total;
+            }
+
+            session.LastBarContrib = contrib;
+        }
+
+        private static void SubtractContrib(
+            ProfileSession session,
+            Dictionary<decimal, PriceLevelData> contrib)
+        {
+            if (contrib == null) return;
+            foreach (var kvp in contrib)
+            {
+                if (!session.PriceLevels.TryGetValue(kvp.Key, out var lvl)) continue;
+                lvl.AskVolume   -= kvp.Value.AskVolume;
+                lvl.BidVolume   -= kvp.Value.BidVolume;
+                lvl.TotalVolume -= kvp.Value.TotalVolume;
+                if (lvl.TotalVolume <= 0)
+                    session.PriceLevels.Remove(kvp.Key);
+            }
+        }
+
+        // =====================================================================
+        //  Métricas: POC, Value Area, POCs secundários
+        // =====================================================================
+
+        private void ComputeMetrics(ProfileSession session)
+        {
+            session.MetricsValid = true;
+            if (session.PriceLevels.Count == 0) return;
+
+            // POC e volume total
+            decimal maxVol = 0m, totVol = 0m, poc = 0m;
+            foreach (var kvp in session.PriceLevels)
+            {
+                totVol += kvp.Value.TotalVolume;
+                if (kvp.Value.TotalVolume > maxVol)
+                {
+                    maxVol = kvp.Value.TotalVolume;
+                    poc    = kvp.Key;
+                }
+            }
+            session.MaxVolume   = maxVol;
+            session.TotalVolume = totVol;
+            session.POC         = poc;
+
+            ComputeValueArea(session);
+            FindSecondaryPOCs(session);
+        }
+
+        private void ComputeValueArea(ProfileSession session)
+        {
+            // Defaulta ao POC se não houver dados suficientes
+            session.VAL = session.POC;
+            session.VAH = session.POC;
+
+            var levels = session.PriceLevels.ToList(); // ascendente por preço
+            int n = levels.Count;
+            if (n == 0) return;
+
+            int pocIdx = levels.FindIndex(kvp => kvp.Key == session.POC);
+            if (pocIdx < 0) return;
+
+            decimal target      = session.TotalVolume * (ValueAreaPercent / 100m);
+            decimal accumulated = levels[pocIdx].Value.TotalVolume;
+            int lo = pocIdx, hi = pocIdx;
+
+            while (accumulated < target)
+            {
+                decimal below = (lo > 0)     ? levels[lo - 1].Value.TotalVolume : -1m;
+                decimal above = (hi < n - 1) ? levels[hi + 1].Value.TotalVolume : -1m;
+
+                if (below < 0 && above < 0) break;
+
+                // Expandir para o lado com mais volume (método standard CME/TPO)
+                if (above >= below)
+                    accumulated += levels[++hi].Value.TotalVolume;
+                else
+                    accumulated += levels[--lo].Value.TotalVolume;
+            }
+
+            session.VAL = levels[lo].Key;
+            session.VAH = levels[hi].Key;
+        }
+
+        private void FindSecondaryPOCs(ProfileSession session)
+        {
+            session.SecondaryPOCs.Clear();
+            if (!MarcarPOCsSecundarios) return;
+
+            var levels = session.PriceLevels.ToList();
+            int n = levels.Count;
+            if (n < 5) return;
+
+            int    pocIdx    = levels.FindIndex(kvp => kvp.Key == session.POC);
+            decimal threshold = session.MaxVolume * (SecondaryPOCThresholdPct / 100m);
+
+            for (int i = 1; i < n - 1; i++)
+            {
+                if (i == pocIdx) continue;
+
+                decimal vol = levels[i].Value.TotalVolume;
+                if (vol < threshold) continue;
+
+                // Máximo local: maior do que os vizinhos imediatos
+                if (vol <= levels[i - 1].Value.TotalVolume ||
+                    vol <= levels[i + 1].Value.TotalVolume)
+                    continue;
+
+                // Separado do POC principal por um "vale" (pelo menos um level
+                // com volume < 70% do mínimo entre este pico e o POC)
+                int rangeL = Math.Min(i, pocIdx) + 1;
+                int rangeR = Math.Max(i, pocIdx);
+                if (rangeR - rangeL < 1) continue; // adjacente ao POC
+
+                decimal valleyThreshold = Math.Min(vol, session.MaxVolume) * 0.70m;
+                bool hasValley = false;
+                for (int j = rangeL; j < rangeR; j++)
+                {
+                    if (levels[j].Value.TotalVolume < valleyThreshold)
+                    {
+                        hasValley = true;
+                        break;
+                    }
+                }
+
+                if (hasValley)
+                    session.SecondaryPOCs.Add(levels[i].Key);
+            }
+        }
+
+        private static decimal RoundToTick(decimal price, decimal tick)
+            => Math.Round(price / tick, MidpointRounding.AwayFromZero) * tick;
+
+        // =====================================================================
+        //  Rendering
+        // =====================================================================
+
+        public override void OnRender(RenderContext context, DrawingLayouts layout)
+        {
+            // ⚠ VERIFICAR — DrawingLayouts.Final: confirmar que este valor existe em SDK 10.
+            // Alternativas comuns: DrawingLayouts.LatestBar, DrawingLayouts.Historical.
+            // Se o indicador não aparecer, experimenta remover a guarda abaixo
+            // e deixar desenhar em todos os layouts.
+            if (layout != DrawingLayouts.Final) return;
+
+            // Modo Manual reservado para Fase 2 — não desenha nada por agora
+            if (PositionMode == PositionMode.Manual) return;
+
+            // Colecionar sessões a renderizar (históricas + actual)
+            var toRender = new List<ProfileSession>(_sessions);
+            if (_currentSession != null
+                && _currentSession.MetricsValid
+                && _currentSession.PriceLevels.Count > 0)
+                toRender.Add(_currentSession);
+
+            foreach (var s in toRender)
+            {
+                if (!s.MetricsValid || s.PriceLevels.Count == 0) continue;
+                DrawSession(context, s);
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        //  Desenho de uma sessão completa
+        // ---------------------------------------------------------------------
+
+        private void DrawSession(RenderContext context, ProfileSession session)
+        {
+            decimal tick = InstrumentInfo.TickSize;
+            if (tick <= 0) tick = 0.01m;
+
+            // ⚠ VERIFICAR — ChartInfo.GetXCoordinate(barIndex): confirmar nome exacto.
+            // Em algumas versões é ChartInfo.GetXCoordinate(bar)
+            // ou ChartInfo.PriceChartContainer.GetXCoordinate(bar).
+            int x1 = GetBarX(session.StartBar); // ⚠ VERIFICAR (ver helper abaixo)
+            int x2 = GetBarX(session.EndBar);   // ⚠ VERIFICAR
+
+            if (x2 < x1) { int tmp = x1; x1 = x2; x2 = tmp; }
+
+            // ⚠ VERIFICAR — ChartInfo.PriceChartContainer.Region: confirmar tipo (Rectangle/Rect).
+            var region = ChartInfo.PriceChartContainer.Region; // ⚠ VERIFICAR
+
+            // Sessão completamente fora do viewport — saltar
+            if (x2 < region.Left || x1 > region.Right) return;
+
+            // Cortar ao viewport
+            x1 = Math.Max(x1, region.Left);
+            x2 = Math.Min(x2, region.Right);
+
+            int totalWidth  = Math.Max(2, x2 - x1);
+            int profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
+
+            if (ProfileType == ProfileType.Volume)
+                DrawVolumeProfile(context, session, x1, profileMaxW, tick);
+            else
+                DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick);
+
+            DrawKeyLevels(context, session, x1, x2, tick);
+        }
+
+        // ---------------------------------------------------------------------
+        //  Modo Volume — barras de volume total, ancoradas à esquerda da sessão
+        // ---------------------------------------------------------------------
+
+        private void DrawVolumeProfile(RenderContext context, ProfileSession session,
+                                       int x1, int maxW, decimal tick)
+        {
+            if (session.MaxVolume <= 0) return;
+
+            foreach (var kvp in session.PriceLevels)
+            {
+                decimal vol = kvp.Value.TotalVolume;
+                if (vol <= 0) continue;
+
+                int barW = Math.Max(1, (int)(vol / session.MaxVolume * maxW));
+
+                GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
+
+                bool  inVA = kvp.Key >= session.VAL && kvp.Key <= session.VAH;
+                Color col  = inVA ? CorVolumePerfil : CorForaValueArea;
+
+                // ⚠ VERIFICAR — context.FillRectangle: confirmar assinatura (Color, Rectangle)
+                context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH)); // ⚠ VERIFICAR
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        //  Modo Volume + Delta
+        //  Eixo central: volume à direita, delta bid/ask à esquerda
+        // ---------------------------------------------------------------------
+
+        private void DrawVolumeDeltaProfile(RenderContext context, ProfileSession session,
+                                            int x1, int x2, int maxW, decimal tick)
+        {
+            if (session.MaxVolume <= 0) return;
+
+            int halfW   = Math.Max(2, maxW / 2);
+            int totalW  = x2 - x1;
+            int centerX = x1 + totalW / 2;
+
+            // Escalar o lado delta pelo máximo de |delta| entre todos os níveis
+            decimal maxAbsDelta = 1m;
+            foreach (var lvl in session.PriceLevels.Values)
+            {
+                decimal ad = Math.Abs(lvl.Delta);
+                if (ad > maxAbsDelta) maxAbsDelta = ad;
+            }
+
+            foreach (var kvp in session.PriceLevels)
+            {
+                var data = kvp.Value;
+                if (data.TotalVolume <= 0) continue;
+
+                GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
+
+                // Lado direito: volume total
+                int volW = Math.Max(1, (int)(data.TotalVolume / session.MaxVolume * halfW));
+                bool inVA = kvp.Key >= session.VAL && kvp.Key <= session.VAH;
+                context.FillRectangle(
+                    inVA ? CorVolumePerfil : CorForaValueArea,
+                    new Rectangle(centerX, yTop, volW, barH)); // ⚠ VERIFICAR
+
+                // Lado esquerdo: |delta|, cor indica dominância
+                int    deltaW = Math.Max(1, (int)(Math.Abs(data.Delta) / maxAbsDelta * halfW));
+                Color  deltaC = data.Delta >= 0 ? CorAsk : CorBid;
+                context.FillRectangle(deltaC,
+                    new Rectangle(centerX - deltaW, yTop, deltaW, barH)); // ⚠ VERIFICAR
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        //  Linhas de nível: POC, VAH, VAL, POCs secundários
+        // ---------------------------------------------------------------------
+
+        private void DrawKeyLevels(RenderContext context, ProfileSession session,
+                                   int x1, int x2, decimal tick)
+        {
+            // VAH
+            DrawHorizontalLevel(context, session.VAH, x1, x2, tick, CorVAH);
+            // VAL
+            DrawHorizontalLevel(context, session.VAL, x1, x2, tick, CorVAL);
+
+            // POC principal — linha sólida, 2px
+            int pocY = PriceToY(session.POC + tick * 0.5m);
+            using (var pen = new Pen(CorPOC, 2f))
+                context.DrawLine(pen, x1, pocY, x2, pocY); // ⚠ VERIFICAR
+
+            // POCs secundários — linha tracejada fina
+            if (MarcarPOCsSecundarios && session.SecondaryPOCs.Count > 0)
+            {
+                using (var dpen = new Pen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash })
+                {
+                    foreach (decimal sp in session.SecondaryPOCs)
+                    {
+                        int sy = PriceToY(sp + tick * 0.5m);
+                        context.DrawLine(dpen, x1, sy, x2, sy); // ⚠ VERIFICAR
+                    }
+                }
+            }
+        }
+
+        private void DrawHorizontalLevel(RenderContext context, decimal price,
+                                         int x1, int x2, decimal tick, Color color)
+        {
+            if (VahValMode == VahValModo.Linha)
+            {
+                int y = PriceToY(price + tick * 0.5m);
+                using (var pen = new Pen(color, 1f) { DashStyle = DashStyle.Dash })
+                    context.DrawLine(pen, x1, y, x2, y); // ⚠ VERIFICAR
+            }
+            else // Zona
+            {
+                int yTop = PriceToY(price + tick);
+                int yBot = PriceToY(price);
+                int zoneH = Math.Max(1, Math.Abs(yBot - yTop));
+                int yDraw = Math.Min(yTop, yBot);
+
+                int alpha  = Math.Max(0, Math.Min(255, ZoneAlpha));
+                var zColor = Color.FromArgb(alpha, color.R, color.G, color.B);
+                context.FillRectangle(zColor,
+                    new Rectangle(x1, yDraw, x2 - x1, zoneH)); // ⚠ VERIFICAR
+            }
+        }
+
+        // =====================================================================
+        //  Helpers de coordenadas
+        //  ⚠ VERIFICAR: ajustar os nomes dos métodos do ChartInfo para os exactos
+        //  do SDK 10. São aqui centralizados para facilitar a correcção.
+        // =====================================================================
+
+        // Converte índice de candle → coordenada X em pixels
+        private int GetBarX(int barIndex)
+        {
+            // ⚠ VERIFICAR — método correcto em IChartInfo / SDK 10:
+            //   ChartInfo.GetXCoordinate(barIndex)
+            //   ChartInfo.PriceChartContainer.GetXCoordinate(barIndex)
+            //   ChartInfo.GetXCoordinate(barIndex, out int barWidth)  (variante com largura)
+            return (int)ChartInfo.GetXCoordinate(barIndex); // ⚠ VERIFICAR
+        }
+
+        // Converte preço → coordenada Y em pixels
+        // Em ATAS, Y cresce para baixo; preços maiores têm Y menor (mais acima).
+        private int PriceToY(decimal price)
+        {
+            // ⚠ VERIFICAR — método correcto em IChartInfo / SDK 10:
+            //   ChartInfo.GetYCoordinate(price)
+            //   ChartInfo.GetYByPrice(price, false)
+            //   ChartInfo.PriceChartContainer.GetYByPrice(price)
+            return (int)ChartInfo.GetYCoordinate(price); // ⚠ VERIFICAR
+        }
+
+        // Calcula o rectângulo (em pixels) de um price level [price, price+tick[
+        private void GetLevelRect(decimal price, decimal tick, out int yTop, out int barH)
+        {
+            int yA = PriceToY(price + tick);
+            int yB = PriceToY(price);
+            yTop = Math.Min(yA, yB);
+            barH = Math.Max(1, Math.Abs(yB - yA));
+        }
+    }
+}

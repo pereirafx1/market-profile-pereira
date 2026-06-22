@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <PlatformTarget>x86</PlatformTarget>
+    <AssemblyName>MarketProfilePereira</AssemblyName>
+    <RootNamespace>MarketProfilePereira</RootNamespace>
+    <LangVersion>8.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <Optimize>true</Optimize>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!--
+    HintPaths apontam para a instalação padrão do ATAS.
+    Se instalaste noutro disco/pasta, ajusta os caminhos abaixo.
+  -->
+  <ItemGroup>
+    <Reference Include="ATAS.Indicators">
+      <HintPath>C:\Program Files (x86)\ATAS Platform\ATAS.Indicators.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="OFT.Core">
+      <HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Core.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="OFT.Rendering">
+      <HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Rendering.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="OFT.Attributes">
+      <HintPath>C:\Program Files (x86)\ATAS Platform\OFT.Attributes.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Utils.Common">
+      <HintPath>C:\Program Files (x86)\ATAS Platform\Utils.Common.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
