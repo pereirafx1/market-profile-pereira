@@ -660,10 +660,9 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // PorCima  → desenha apenas no layer Final (por cima das candles).
-            // PorTras  → desenha em qualquer layer que não seja Final (fica atrás das candles).
-            if (ProfileLayer == ProfileLayer.PorCima  && layout != DrawingLayouts.Final) return;
-            if (ProfileLayer == ProfileLayer.PorTras  && layout == DrawingLayouts.Final) return;
+            // PorTras: só desenha nos layers de fundo (exclui Final que nunca é chamado pelo ATAS).
+            // PorCima: sem filtro — desenha em todos os passes; o último compose fica sobre as candles.
+            if (ProfileLayer == ProfileLayer.PorTras && layout == DrawingLayouts.Final) return;
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
