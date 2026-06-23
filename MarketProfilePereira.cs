@@ -374,8 +374,10 @@ namespace ATAS.Indicators.Custom
             if (_currentSession.PriceLevels.Count > 0)
             {
                 _sessions.Add(_currentSession);
-                // Manter apenas as N mais recentes
-                int max = Math.Max(1, SessionsToShow);
+                // Guardar um buffer generoso para que o scroll histórico ainda tenha dados.
+                // SessionsToShow controla quantas sessões aparecem no viewport normal;
+                // armazenamos 10× mais para suportar navegação para o passado.
+                int max = Math.Max(SessionsToShow * 10, 50);
                 while (_sessions.Count > max)
                     _sessions.RemoveAt(0);
             }
