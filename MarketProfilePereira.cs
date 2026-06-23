@@ -131,9 +131,9 @@ namespace ATAS.Indicators.Custom
             set
             {
                 _profileLayer = value;
-                // PorCima começa com DrawAbovePrice=true para ficar acima das candles.
-                // OnRender faz comutação dinâmica para false quando a barra atual sai do ecrã.
-                DrawAbovePrice = (value == ProfileLayer.PorCima);
+                // Repor sempre para false ao mudar de modo.
+                // OnRender gere a comutação true/false para PorCima dinamicamente.
+                DrawAbovePrice = false;
             }
         }
 
