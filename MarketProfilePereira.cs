@@ -992,11 +992,11 @@ namespace ATAS.Indicators.Custom
             string  text  = delta >= 0 ? $"+{delta:N0}" : $"{delta:N0}";
             Color   col   = ApplyOpacity(CorDeltaTotal);
 
-            using var font = new Font("Arial", 9f, FontStyle.Bold);
+            var font = new RenderFont("Arial", 9f);
             // Centre the text horizontally: estimate ~7px per char, then shift right.
-            int approxW  = text.Length * 7;
-            int centreX  = x1 + (x2 - x1 - approxW) / 2;
-            centreX      = Math.Max(x1, Math.Min(centreX, x2 - approxW));
+            int approxW = text.Length * 7;
+            int centreX = x1 + (x2 - x1 - approxW) / 2;
+            centreX     = Math.Max(x1, Math.Min(centreX, x2 - approxW));
             context.DrawString(text, font, col, new Rectangle(centreX, labelY, approxW + 4, labelH));
         }
 
