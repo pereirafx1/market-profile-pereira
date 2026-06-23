@@ -90,6 +90,7 @@ namespace ATAS.Indicators.Custom
 
             public decimal MaxVolume;
             public decimal TotalVolume;
+            public decimal TotalDelta;
             public bool    MetricsValid;
 
             // Snapshot da contribuição da última candle (para recalc no tick ao vivo)
@@ -240,6 +241,17 @@ namespace ATAS.Indicators.Custom
         [Display(Name = "POC secundário — cor",
                  GroupName = "POC", Order = 34)]
         public Color CorPOCSecundario { get; set; } = Color.FromArgb(255, 180, 80, 255);
+
+        // --- Delta Total ---
+
+        [Display(Name = "Mostrar Delta Total",
+                 Description = "Mostra o delta total acumulado (Ask − Bid) no topo de cada profile.",
+                 GroupName = "Delta Total", Order = 35)]
+        public bool MostrarDeltaTotal { get; set; } = false;
+
+        [Display(Name = "Cor do Delta Total",
+                 GroupName = "Delta Total", Order = 36)]
+        public Color CorDeltaTotal { get; set; } = Color.White;
 
         // --- Colors — Volume ---
 
@@ -595,6 +607,11 @@ namespace ATAS.Indicators.Custom
             session.TotalVolume = totVol;
             session.POC         = poc;
 
+            decimal totDelta = 0m;
+            foreach (var kvp in session.PriceLevels)
+                totDelta += kvp.Value.Delta;
+            session.TotalDelta = totDelta;
+
             ComputeValueArea(session);
             FindSecondaryPOCs(session);
         }
@@ -831,6 +848,7 @@ namespace ATAS.Indicators.Custom
             }
 
             DrawKeyLevels(context, session, levelX1, levelX2, tick);
+            DrawTotalDeltaLabel(context, session, x1, x2);
         }
 
         // ---------------------------------------------------------------------
@@ -950,6 +968,36 @@ namespace ATAS.Indicators.Custom
                 var zColor = ApplyOpacity(Color.FromArgb(alpha, color.R, color.G, color.B));
                 context.FillRectangle(zColor, new Rectangle(x1, yDraw, x2 - x1, zoneH));
             }
+        }
+
+        // ---------------------------------------------------------------------
+        //  Delta Total label — desenhado acima do topo do profile
+        // ---------------------------------------------------------------------
+
+        private void DrawTotalDeltaLabel(RenderContext context, ProfileSession session, int x1, int x2)
+        {
+            if (!MostrarDeltaTotal) return;
+            if (x1 >= x2) return;
+            if (session.PriceLevels.Count == 0) return;
+
+            decimal highPrice = session.PriceLevels.Keys.Max();
+            decimal tick      = InstrumentInfo.TickSize;
+            if (tick <= 0) tick = 0.01m;
+
+            int yTop   = PriceToY(highPrice + tick);
+            int labelH = 18;
+            int labelY = yTop - labelH - 2;
+
+            decimal delta = session.TotalDelta;
+            string  text  = delta >= 0 ? $"+{delta:N0}" : $"{delta:N0}";
+            Color   col   = ApplyOpacity(CorDeltaTotal);
+
+            using var font = new Font("Arial", 9f, FontStyle.Bold);
+            // Centre the text horizontally: estimate ~7px per char, then shift right.
+            int approxW  = text.Length * 7;
+            int centreX  = x1 + (x2 - x1 - approxW) / 2;
+            centreX      = Math.Max(x1, Math.Min(centreX, x2 - approxW));
+            context.DrawString(text, font, col, new Rectangle(centreX, labelY, approxW + 4, labelH));
         }
 
         // =====================================================================
