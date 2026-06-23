@@ -734,11 +734,18 @@ namespace ATAS.Indicators.Custom
             else
             {
                 // Ambos fora do ecrã. Dois casos possíveis:
-                //   A) Sessão abrange todo o viewport (zoom muito elevado) → desenhar largura total.
+                //   A) Sessão abrange o viewport (StartBar fora à esq., EndBar fora à dir.) → largura total.
                 //   B) Sessão completamente fora do viewport → não desenhar.
-                // Distinguir verificando o bar do meio da sessão.
-                int xMid = GetBarX((session.StartBar + session.EndBar) / 2);
-                if (xMid == 0) return;  // completamente fora do ecrã
+                // Um único ponto central falha quando o viewport está na metade posterior da sessão
+                // (o ponto central fica fora à esquerda e GetBarX devolve 0 incorrectamente).
+                // Solução: amostrar 15 pontos igualmente espaçados — qualquer janela > 1/16 da
+                // duração da sessão garante que pelo menos um ponto cai dentro do viewport.
+                int range = session.EndBar - session.StartBar;
+                if (range <= 0) return;
+                bool found = false;
+                for (int k = 1; k <= 15 && !found; k++)
+                    found = GetBarX(session.StartBar + (int)((long)range * k / 16)) != 0;
+                if (!found) return;
                 x1 = viewLeft;
                 x2 = viewRight;
             }
