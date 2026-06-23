@@ -15,6 +15,8 @@ using System.ComponentModel.DataAnnotations;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
+using System.Reflection;
+using System.Text;
 using ATAS.Indicators;
 using OFT.Rendering.Context;   // ⚠ VERIFICAR — namespace exacto em SDK 10
 using OFT.Rendering.Settings;  // ⚠ VERIFICAR — namespace onde vive DrawingLayouts
@@ -202,6 +204,7 @@ namespace ATAS.Indicators.Custom
 
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
+        private          bool                 _apiDumped;
 
         // =====================================================================
         //  Construtor
@@ -234,6 +237,16 @@ namespace ATAS.Indicators.Custom
 
             var candle = GetCandle(bar);
             if (candle == null) return;
+
+            // DIAGNÓSTICO — escreve no Desktop uma lista de todas as propriedades/métodos
+            // do tipo real de IndicatorCandle e do DataProvider.
+            // Executar UMA vez, abrir atas_api_dump.txt no Desktop e partilhar o conteúdo.
+            // Depois desta informação, o bloco de diagnóstico pode ser removido.
+            if (!_apiDumped && bar >= 1)
+            {
+                _apiDumped = true;
+                DumpAtasApi(candle);
+            }
 
             var (sStart, sEnd) = GetSessionTimes();
 
@@ -552,6 +565,48 @@ namespace ATAS.Indicators.Custom
 
         private static decimal RoundToTick(decimal price, decimal tick)
             => Math.Round(price / tick, MidpointRounding.AwayFromZero) * tick;
+
+        // =====================================================================
+        //  Diagnóstico — listar API disponível em runtime (remover depois de identificada)
+        // =====================================================================
+
+        private void DumpAtasApi(IndicatorCandle candle)
+        {
+            try
+            {
+                const BindingFlags PUB = BindingFlags.Public | BindingFlags.Instance;
+                var sb = new StringBuilder();
+
+                // Tipo real do objecto candle (pode ser subclasse de IndicatorCandle)
+                var ct = candle.GetType();
+                sb.AppendLine($"=== CANDLE runtime type: {ct.FullName} ===");
+                sb.AppendLine("-- Properties --");
+                foreach (var p in ct.GetProperties(PUB))
+                    sb.AppendLine($"  {p.PropertyType.Name,-40} {p.Name}");
+                sb.AppendLine("-- Methods (declared on this type only) --");
+                foreach (var m in ct.GetMethods(PUB | BindingFlags.DeclaredOnly))
+                    sb.AppendLine($"  {m.Name}");
+
+                // Tipo real do DataProvider
+                if (DataProvider != null)
+                {
+                    var dt = DataProvider.GetType();
+                    sb.AppendLine($"\n=== DATAPROVIDER runtime type: {dt.FullName} ===");
+                    sb.AppendLine("-- Properties --");
+                    foreach (var p in dt.GetProperties(PUB))
+                        sb.AppendLine($"  {p.PropertyType.Name,-40} {p.Name}");
+                    sb.AppendLine("-- Methods --");
+                    foreach (var m in dt.GetMethods(PUB | BindingFlags.DeclaredOnly))
+                        sb.AppendLine($"  {m.Name}");
+                }
+
+                string path = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
+                    "atas_api_dump.txt");
+                System.IO.File.WriteAllText(path, sb.ToString());
+            }
+            catch { /* silencioso — não interrompe o indicador */ }
+        }
 
         // =====================================================================
         //  Rendering
