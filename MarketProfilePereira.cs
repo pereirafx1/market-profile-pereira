@@ -702,11 +702,15 @@ namespace ATAS.Indicators.Custom
 
             var region = ChartInfo.PriceChartContainer.Region;
 
-            // Quando a sessão começa ou termina fora do viewport, GetXByBar devolve 0
-            // (valor inválido). Usamos o índice da primeira barra visível para detectar
-            // quais extremos estão fora do ecrã e usar as bordas do viewport nesses casos.
-            int firstVisible = ChartInfo.FirstVisibleBarIndex;
-            int lastVisible  = CurrentBar - 1;
+            // Estima a primeira barra visível a partir da largura de uma barra em píxeis.
+            // GetXByBar retorna 0 para barras fora do ecrã, o que colapsa o range quando
+            // a sessão está mais larga do que o viewport (zoom elevado).
+            int lastVisible = CurrentBar - 1;
+            int xLast       = lastVisible >= 1 ? GetBarX(lastVisible)     : region.Right;
+            int xPrev       = lastVisible >= 2 ? GetBarX(lastVisible - 1) : region.Left;
+            int barPxW      = Math.Max(1, Math.Abs(xLast - xPrev));
+            int visCount    = Math.Max(1, (region.Right - region.Left) / barPxW);
+            int firstVisible = Math.Max(0, lastVisible - visCount - 2); // +2 de margem
 
             // Sessão completamente fora do viewport — não desenha
             if (session.EndBar < firstVisible || session.StartBar > lastVisible) return;
