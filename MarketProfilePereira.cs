@@ -53,6 +53,8 @@ namespace ATAS.Indicators.Custom
 
     public enum VahValModo { Linha, Zona }
 
+    public enum ProfileLayer { PorTras, PorCima }
+
     // =========================================================================
     //  Classe principal
     // =========================================================================
@@ -119,6 +121,16 @@ namespace ATAS.Indicators.Custom
                  Description = "Percentagem do range X da sessão que as barras do perfil podem ocupar.",
                  GroupName = "Profile", Order = 2)]
         public int MaxWidthPercent { get; set; } = 70;
+
+        [Display(Name = "Layer",
+                 Description = "PorTras = profile desenhado atrás das candles. PorCima = por cima de tudo.",
+                 GroupName = "Profile", Order = 3)]
+        public ProfileLayer ProfileLayer { get; set; } = ProfileLayer.PorTras;
+
+        [Display(Name = "Opacidade do profile (0–100)",
+                 Description = "Aplica-se a todas as barras, linhas e zonas do profile.",
+                 GroupName = "Profile", Order = 4)]
+        public int ProfileOpacity { get; set; } = 80;
 
         // --- Sessions ---
 
@@ -635,10 +647,23 @@ namespace ATAS.Indicators.Custom
         //  Rendering
         // =====================================================================
 
+        // Aplica a opacidade global (0-100) à componente alpha de uma cor.
+        private Color ApplyOpacity(Color c)
+        {
+            int pct   = Math.Max(0, Math.Min(100, ProfileOpacity));
+            int alpha = (int)Math.Round(c.A * pct / 100.0);
+            return Color.FromArgb(alpha, c.R, c.G, c.B);
+        }
+
         protected override void OnRender(RenderContext context, DrawingLayouts layout)
         {
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
+
+            // Renderizar apenas no layer correcto para evitar duplo desenho.
+            bool wantFinal = (ProfileLayer == ProfileLayer.PorCima);
+            if (wantFinal && layout != DrawingLayouts.Final)      return;
+            if (!wantFinal && layout != DrawingLayouts.BelowCandles) return;
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
@@ -725,10 +750,9 @@ namespace ATAS.Indicators.Custom
                 GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
 
                 bool  inVA = kvp.Key >= session.VAL && kvp.Key <= session.VAH;
-                Color col  = inVA ? CorVolumePerfil : CorForaValueArea;
+                Color col  = ApplyOpacity(inVA ? CorVolumePerfil : CorForaValueArea);
 
-                // ⚠ VERIFICAR — context.FillRectangle: confirmar assinatura (Color, Rectangle)
-                context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH)); // ⚠ VERIFICAR
+                context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
             }
         }
 
@@ -765,14 +789,14 @@ namespace ATAS.Indicators.Custom
                 int volW = Math.Max(1, (int)(data.TotalVolume / session.MaxVolume * halfW));
                 bool inVA = kvp.Key >= session.VAL && kvp.Key <= session.VAH;
                 context.FillRectangle(
-                    inVA ? CorVolumePerfil : CorForaValueArea,
-                    new Rectangle(centerX, yTop, volW, barH)); // ⚠ VERIFICAR
+                    ApplyOpacity(inVA ? CorVolumePerfil : CorForaValueArea),
+                    new Rectangle(centerX, yTop, volW, barH));
 
                 // Lado esquerdo: |delta|, cor indica dominância
-                int    deltaW = Math.Max(1, (int)(Math.Abs(data.Delta) / maxAbsDelta * halfW));
-                Color  deltaC = data.Delta >= 0 ? CorAsk : CorBid;
+                int   deltaW = Math.Max(1, (int)(Math.Abs(data.Delta) / maxAbsDelta * halfW));
+                Color deltaC = ApplyOpacity(data.Delta >= 0 ? CorAsk : CorBid);
                 context.FillRectangle(deltaC,
-                    new Rectangle(centerX - deltaW, yTop, deltaW, barH)); // ⚠ VERIFICAR
+                    new Rectangle(centerX - deltaW, yTop, deltaW, barH));
             }
         }
 
@@ -788,18 +812,18 @@ namespace ATAS.Indicators.Custom
             // VAL
             DrawHorizontalLevel(context, session.VAL, x1, x2, tick, CorVAL);
 
-            // POC principal — rect 2px de altura (renderiza no mesmo layer que os FillRectangles)
+            // POC principal — rect 2px de altura
             int pocY = PriceToY(session.POC + tick * 0.5m);
-            context.FillRectangle(CorPOC, new Rectangle(x1, pocY - 1, x2 - x1, 2));
+            context.FillRectangle(ApplyOpacity(CorPOC), new Rectangle(x1, pocY - 1, x2 - x1, 2));
 
             // POCs secundários — linha tracejada fina
             if (MostrarPOCsSecundarios && session.SecondaryPOCs.Count > 0)
             {
-                var dpen = new RenderPen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash };
+                var dpen = new RenderPen(ApplyOpacity(CorPOCSecundario), 1f) { DashStyle = DashStyle.Dash };
                 foreach (decimal sp in session.SecondaryPOCs)
                 {
                     int sy = PriceToY(sp + tick * 0.5m);
-                    context.DrawLine(dpen, x1, sy, x2, sy); // ⚠ VERIFICAR assinatura exacta
+                    context.DrawLine(dpen, x1, sy, x2, sy);
                 }
             }
         }
@@ -809,22 +833,20 @@ namespace ATAS.Indicators.Custom
         {
             if (VahValMode == VahValModo.Linha)
             {
-                int y = PriceToY(price + tick * 0.5m);
-                // FillRectangle garante visibilidade sobre as barras do perfil
-                var lineColor = Color.FromArgb(220, color.R, color.G, color.B);
+                int y         = PriceToY(price + tick * 0.5m);
+                var lineColor = ApplyOpacity(Color.FromArgb(220, color.R, color.G, color.B));
                 context.FillRectangle(lineColor, new Rectangle(x1, y, x2 - x1, 1));
             }
             else // Zona
             {
-                int yTop = PriceToY(price + tick);
-                int yBot = PriceToY(price);
+                int yTop  = PriceToY(price + tick);
+                int yBot  = PriceToY(price);
                 int zoneH = Math.Max(1, Math.Abs(yBot - yTop));
                 int yDraw = Math.Min(yTop, yBot);
 
                 int alpha  = Math.Max(0, Math.Min(255, ZoneAlpha));
-                var zColor = Color.FromArgb(alpha, color.R, color.G, color.B);
-                context.FillRectangle(zColor,
-                    new Rectangle(x1, yDraw, x2 - x1, zoneH)); // ⚠ VERIFICAR
+                var zColor = ApplyOpacity(Color.FromArgb(alpha, color.R, color.G, color.B));
+                context.FillRectangle(zColor, new Rectangle(x1, yDraw, x2 - x1, zoneH));
             }
         }
 
