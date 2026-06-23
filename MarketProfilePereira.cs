@@ -277,6 +277,10 @@ namespace ATAS.Indicators.Custom
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
 
+        // Timestamp da última chamada a OnRender (Stopwatch ticks).
+        // Usado para detetar quando o ATAS para de chamar OnRender (DrawAbovePrice=true + barra atual fora do ecrã).
+        private long _lastRenderTick;
+
         // =====================================================================
         //  Construtor
         // =====================================================================
@@ -285,7 +289,6 @@ namespace ATAS.Indicators.Custom
         {
             EnableCustomDrawing = true;
             DenyToChangePanel   = true;
-            DrawAbovePrice      = false; // Sempre false — DrawAbovePrice=true impede OnRender em modo histórico
         }
 
         // =====================================================================
@@ -296,6 +299,7 @@ namespace ATAS.Indicators.Custom
         {
             _sessions.Clear();
             _currentSession = null;
+            _lastRenderTick = System.Diagnostics.Stopwatch.GetTimestamp();
         }
 
         protected override void OnCalculate(int bar, decimal value)
@@ -305,6 +309,19 @@ namespace ATAS.Indicators.Custom
             {
                 _sessions.Clear();
                 _currentSession = null;
+            }
+
+            // Detetar quando o ATAS para de chamar OnRender (DrawAbovePrice=true + barra atual fora do ecrã).
+            // OnCalculate continua a ser chamado com cada tick mesmo em vista histórica,
+            // por isso serve de "watchdog": se DrawAbovePrice=true e OnRender não foi
+            // chamado há >500 ms, a barra atual saiu do ecrã — repor para false para que
+            // o ATAS volte a chamar OnRender e os profiles fiquem visíveis.
+            if (bar == CurrentBar && ProfileLayer == ProfileLayer.PorCima && DrawAbovePrice)
+            {
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                double ms = (now - _lastRenderTick) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                if (ms > 500)
+                    DrawAbovePrice = false;
             }
 
             var candle = GetCandle(bar);
@@ -669,13 +686,32 @@ namespace ATAS.Indicators.Custom
 
         protected override void OnRender(RenderContext context, DrawingLayouts layout)
         {
-            // Modo Manual reservado para Fase 2 — não desenha nada por agora
+            _lastRenderTick = System.Diagnostics.Stopwatch.GetTimestamp();
+
             if (PositionMode == PositionMode.Manual) return;
 
-            // DrawAbovePrice controla o Z-order (acima/abaixo das candles).
-            // É definido no setter: true para PorCima, false para PorTras.
-            // Sem filtro de layout — o ATAS também chama com DrawingLayouts.Final
-            // durante zoom/scroll e filtrar esse passe causava desaparecimento.
+            // Comutação dinâmica de DrawAbovePrice para PorCima:
+            //   • DrawAbovePrice=true → acima das candles, mas ATAS para de chamar OnRender
+            //                           quando a barra atual sai do ecrã
+            //   • DrawAbovePrice=false → OnRender sempre chamado, profiles visíveis no histórico
+            //
+            // Quando OnRender é chamado (durante scroll ou evento de zoom), verificamos a
+            // visibilidade da barra atual e comutamos em conformidade.
+            // O watchdog em OnCalculate complementa este mecanismo para o caso de ATAS não
+            // chamar OnRender durante a transição.
+            if (ProfileLayer == ProfileLayer.PorCima)
+            {
+                int curX = CurrentBar >= 0 ? GetBarX(CurrentBar) : 0;
+                if (DrawAbovePrice && curX == 0)
+                {
+                    DrawAbovePrice = false;  // barra saiu do ecrã → manter OnRender ativo
+                }
+                else if (!DrawAbovePrice && curX != 0)
+                {
+                    DrawAbovePrice = true;   // barra voltou ao ecrã → acima das candles
+                    return;                  // este frame ainda era DrawAbovePrice=false; ATAS re-chama acima
+                }
+            }
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
