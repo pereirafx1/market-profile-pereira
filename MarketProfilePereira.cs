@@ -15,8 +15,6 @@ using System.ComponentModel.DataAnnotations;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Reflection;
-using System.Text;
 using ATAS.Indicators;
 using OFT.Rendering.Context;   // ⚠ VERIFICAR — namespace exacto em SDK 10
 using OFT.Rendering.Settings;  // ⚠ VERIFICAR — namespace onde vive DrawingLayouts
@@ -204,7 +202,6 @@ namespace ATAS.Indicators.Custom
 
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
-        private          bool                 _apiDumped;
 
         // =====================================================================
         //  Construtor
@@ -237,16 +234,6 @@ namespace ATAS.Indicators.Custom
 
             var candle = GetCandle(bar);
             if (candle == null) return;
-
-            // DIAGNÓSTICO — escreve no Desktop uma lista de todas as propriedades/métodos
-            // do tipo real de IndicatorCandle e do DataProvider.
-            // Executar UMA vez, abrir atas_api_dump.txt no Desktop e partilhar o conteúdo.
-            // Depois desta informação, o bloco de diagnóstico pode ser removido.
-            if (!_apiDumped && bar >= 1)
-            {
-                _apiDumped = true;
-                DumpAtasApi(candle);
-            }
 
             var (sStart, sEnd) = GetSessionTimes();
 
@@ -383,23 +370,18 @@ namespace ATAS.Indicators.Custom
 
             var contrib = new Dictionary<decimal, PriceLevelData>();
 
-            // ⚠ VERIFICAR — footprint real por price level.
-            // IndicatorCandle.Volumes não existe em SDK 10. Substituir o bloco abaixo
-            // pelo padrão correcto do SDK 10 assim que confirmado (ex: DataProvider, cast, etc.).
-            // Por agora usa distribuição uniforme: delta de cada nível = delta_total / n_ticks.
-            // Resultado: o perfil de delta terá a mesma forma que o volume; as zonas vão diferir
-            // do perfil nativo do ATAS até que a API de footprint correcta seja ligada aqui.
-            decimal priceLo = RoundToTick(candle.Low,  tick);
-            decimal priceHi = RoundToTick(candle.High, tick);
-            int     ticks   = Math.Max(1, (int)Math.Round((priceHi - priceLo) / tick) + 1);
-            decimal askPerT = Math.Max(0m, (candle.Volume + candle.Delta) / 2m) / ticks;
-            decimal bidPerT = Math.Max(0m, (candle.Volume - candle.Delta) / 2m) / ticks;
-
-            for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
+            for (decimal price = candle.Low; price <= candle.High + tick * 0.001m; price += tick)
             {
-                decimal tot = askPerT + bidPerT;
+                decimal p   = RoundToTick(price, tick);
+                var     pvi = candle.GetPriceVolumeInfo(p);
+                if (pvi == null) continue;
+
+                decimal ask = Math.Max(0m, pvi.Ask);
+                decimal bid = Math.Max(0m, pvi.Bid);
+                decimal tot = ask + bid;
                 if (tot <= 0) continue;
-                AccumulateLevel(session, contrib, p, askPerT, bidPerT, tot);
+
+                AccumulateLevel(session, contrib, p, ask, bid, tot);
             }
 
             session.LastBarContrib = contrib;
@@ -565,48 +547,6 @@ namespace ATAS.Indicators.Custom
 
         private static decimal RoundToTick(decimal price, decimal tick)
             => Math.Round(price / tick, MidpointRounding.AwayFromZero) * tick;
-
-        // =====================================================================
-        //  Diagnóstico — listar API disponível em runtime (remover depois de identificada)
-        // =====================================================================
-
-        private void DumpAtasApi(IndicatorCandle candle)
-        {
-            try
-            {
-                const BindingFlags PUB = BindingFlags.Public | BindingFlags.Instance;
-                var sb = new StringBuilder();
-
-                // Tipo real do objecto candle (pode ser subclasse de IndicatorCandle)
-                var ct = candle.GetType();
-                sb.AppendLine($"=== CANDLE runtime type: {ct.FullName} ===");
-                sb.AppendLine("-- Properties --");
-                foreach (var p in ct.GetProperties(PUB))
-                    sb.AppendLine($"  {p.PropertyType.Name,-40} {p.Name}");
-                sb.AppendLine("-- Methods (declared on this type only) --");
-                foreach (var m in ct.GetMethods(PUB | BindingFlags.DeclaredOnly))
-                    sb.AppendLine($"  {m.Name}");
-
-                // Tipo real do DataProvider
-                if (DataProvider != null)
-                {
-                    var dt = DataProvider.GetType();
-                    sb.AppendLine($"\n=== DATAPROVIDER runtime type: {dt.FullName} ===");
-                    sb.AppendLine("-- Properties --");
-                    foreach (var p in dt.GetProperties(PUB))
-                        sb.AppendLine($"  {p.PropertyType.Name,-40} {p.Name}");
-                    sb.AppendLine("-- Methods --");
-                    foreach (var m in dt.GetMethods(PUB | BindingFlags.DeclaredOnly))
-                        sb.AppendLine($"  {m.Name}");
-                }
-
-                string path = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
-                    "atas_api_dump.txt");
-                System.IO.File.WriteAllText(path, sb.ToString());
-            }
-            catch { /* silencioso — não interrompe o indicador */ }
-        }
 
         // =====================================================================
         //  Rendering
