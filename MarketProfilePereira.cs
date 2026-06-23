@@ -326,14 +326,9 @@ namespace ATAS.Indicators.Custom
                 DrawAbovePrice = false; // barra atual fora do ecrã → ATAS volta a chamar OnRender
         }
 
-        protected override void Dispose(bool disposing)
+        ~MarketProfilePereira()
         {
-            if (disposing)
-            {
-                _watchdog?.Dispose();
-                _watchdog = null;
-            }
-            base.Dispose(disposing);
+            _watchdog?.Dispose();
         }
 
         protected override void OnCalculate(int bar, decimal value)
