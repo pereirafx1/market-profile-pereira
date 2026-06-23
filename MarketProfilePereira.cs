@@ -37,6 +37,7 @@ namespace ATAS.Indicators.Custom
         NewYork,
         NYOpen,
         LondonNYOverlap,
+        Daily,
         Custom
     }
 
@@ -224,6 +225,9 @@ namespace ATAS.Indicators.Custom
         //  Estado interno
         // =====================================================================
 
+        private static readonly TimeZoneInfo _nyTZ =
+            TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+
         // Backing fields para propriedades que forçam RecalculateValues()
         private ProfileType    _profileType    = ProfileType.Volume;
         private SessionPreset  _session        = SessionPreset.NewYork;
@@ -267,21 +271,16 @@ namespace ATAS.Indicators.Custom
             var candle = GetCandle(bar);
             if (candle == null) return;
 
-            var (sStart, sEnd) = GetSessionTimes();
-
-            // ⚠ VERIFICAR — candle.Time: confirmar se é UTC ou hora local da exchange.
-            // Se o ATAS devolver hora local, substituir por candle.Time.ToUniversalTime()
-            // ou ajustar os horários das sessões para a timezone correcta.
-            DateTime t        = candle.Time;
-            bool     inSess   = IsInSession(t, sStart, sEnd);
-            bool     isLive   = (bar == CurrentBar - 1);
+            DateTime t      = candle.Time;
+            bool     inSess = IsInCurrentSession(t);
+            bool     isLive = (bar == CurrentBar - 1);
 
             if (inSess)
             {
-                DateTime anchor = GetSessionAnchorDate(t, sStart, sEnd);
+                DateTime anchor = GetCurrentSessionAnchor(t);
 
                 bool needNew = _currentSession == null
-                    || GetSessionAnchorDate(_currentSession.StartTime, sStart, sEnd) != anchor;
+                    || GetCurrentSessionAnchor(_currentSession.StartTime) != anchor;
 
                 if (needNew)
                 {
@@ -344,48 +343,67 @@ namespace ATAS.Indicators.Custom
             _currentSession = null;
         }
 
-        private (TimeSpan start, TimeSpan end) GetSessionTimes()
+        // Devolve true se o timestamp UTC da candle pertence à sessão configurada.
+        private bool IsInCurrentSession(DateTime utcTime)
+        {
+            if (Session == SessionPreset.Daily) return true;
+
+            if (Session == SessionPreset.Custom)
+            {
+                DateTime nyTime = TimeZoneInfo.ConvertTime(utcTime, _nyTZ);
+                var (cs, ce)    = ParseCustomTimes();
+                return IsInSessionSpan(nyTime.TimeOfDay, cs, ce);
+            }
+
+            var (s, e) = GetPresetSessionTimesUtc();
+            return IsInSessionSpan(utcTime.TimeOfDay, s, e);
+        }
+
+        // Devolve a data âncora que agrupa todas as candles do mesmo dia de sessão.
+        private DateTime GetCurrentSessionAnchor(DateTime utcTime)
+        {
+            if (Session == SessionPreset.Daily) return utcTime.Date;
+
+            if (Session == SessionPreset.Custom)
+            {
+                DateTime nyTime = TimeZoneInfo.ConvertTime(utcTime, _nyTZ);
+                var (cs, ce)    = ParseCustomTimes();
+                // Se a sessão atravessa meia-noite NY e estamos antes do fim, âncora = dia anterior NY
+                if (cs > ce && nyTime.TimeOfDay < ce)
+                    return nyTime.Date.AddDays(-1);
+                return nyTime.Date;
+            }
+
+            var (s, e) = GetPresetSessionTimesUtc();
+            if (s > e && utcTime.TimeOfDay < e)
+                return utcTime.Date.AddDays(-1);
+            return utcTime.Date;
+        }
+
+        private (TimeSpan start, TimeSpan end) ParseCustomTimes()
+        {
+            if (TimeSpan.TryParse(CustomStart, out var cs) && TimeSpan.TryParse(CustomEnd, out var ce))
+                return (cs, ce);
+            return (new TimeSpan(9, 30, 0), new TimeSpan(16, 0, 0)); // fallback: horário NY regular
+        }
+
+        private (TimeSpan start, TimeSpan end) GetPresetSessionTimesUtc()
         {
             switch (Session)
             {
-                case SessionPreset.Asia:
-                    return (new TimeSpan(0, 0, 0), new TimeSpan(9, 0, 0));
-                case SessionPreset.London:
-                    return (new TimeSpan(7, 0, 0), new TimeSpan(16, 0, 0));
-                case SessionPreset.NewYork:
-                    return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
-                case SessionPreset.NYOpen:
-                    return (new TimeSpan(13, 30, 0), new TimeSpan(15, 0, 0));
-                case SessionPreset.LondonNYOverlap:
-                    return (new TimeSpan(12, 0, 0), new TimeSpan(16, 30, 0));
-                case SessionPreset.Custom:
-                    if (TimeSpan.TryParse(CustomStart, out var cs) &&
-                        TimeSpan.TryParse(CustomEnd,   out var ce))
-                        return (cs, ce);
-                    // fallback se o parse falhar
-                    return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
-                default:
-                    return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
+                case SessionPreset.Asia:            return (new TimeSpan(0,  0, 0), new TimeSpan(9,  0, 0));
+                case SessionPreset.London:          return (new TimeSpan(7,  0, 0), new TimeSpan(16, 0, 0));
+                case SessionPreset.NewYork:         return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
+                case SessionPreset.NYOpen:          return (new TimeSpan(13,30, 0), new TimeSpan(15, 0, 0));
+                case SessionPreset.LondonNYOverlap: return (new TimeSpan(12, 0, 0), new TimeSpan(16,30, 0));
+                default:                            return (new TimeSpan(13, 0, 0), new TimeSpan(22, 0, 0));
             }
         }
 
-        private static bool IsInSession(DateTime time, TimeSpan start, TimeSpan end)
+        private static bool IsInSessionSpan(TimeSpan t, TimeSpan start, TimeSpan end)
         {
-            TimeSpan t = time.TimeOfDay;
-            // Sessão normal (não atravessa meia-noite)
             if (start <= end) return t >= start && t < end;
-            // Sessão que atravessa meia-noite (ex: Ásia 22:00 → 06:00)
-            return t >= start || t < end;
-        }
-
-        // Retorna a "data âncora" que agrupa candles na mesma sessão.
-        // Para sessões que atravessam meia-noite, candles com hora < end
-        // pertencem à sessão do dia anterior.
-        private static DateTime GetSessionAnchorDate(DateTime time, TimeSpan start, TimeSpan end)
-        {
-            if (start > end && time.TimeOfDay < end)
-                return time.Date.AddDays(-1);
-            return time.Date;
+            return t >= start || t < end; // atravessa meia-noite
         }
 
         // =====================================================================
