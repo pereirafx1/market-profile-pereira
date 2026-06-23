@@ -17,6 +17,11 @@
     Se instalaste noutro disco/pasta, ajusta os caminhos abaixo.
   -->
   <ItemGroup>
+    <!-- System.Drawing.Common: necessário em .NET 10 para Pen, DashStyle, Bitmap, etc. -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="ATAS.Indicators">
       <HintPath>C:\Program Files (x86)\ATAS Platform\ATAS.Indicators.dll</HintPath>
       <Private>False</Private>

@@ -366,26 +366,26 @@ namespace ATAS.Indicators.Custom
             decimal priceLo = RoundToTick(candle.Low,  tick);
             decimal priceHi = RoundToTick(candle.High, tick);
 
+            // ⚠ VERIFICAR — API de volume por price level em IIndicatorDataProvider (SDK 10).
+            // GetAskVolume/GetBidVolume não existem nessa interface.
+            // FALLBACK TEMPORÁRIO: distribui o volume/delta total da candle uniformemente
+            // por todos os price levels do range High–Low.
+            // Produz perfil correcto em forma (range de preços) mas sem distribuição intra-barra real.
+            //
+            // Para activar footprint verdadeiro, substituir askPerTick/bidPerTick dentro do loop
+            // pela API correcta depois de a identificar. Candidatos a verificar no SDK 10:
+            //   (a) IndicatorCandle.Volumes — SortedDictionary<decimal, CandleVolumeInfo>?
+            //   (b) GetCandle(bar) cast para tipo concreto com acesso a cluster
+            //   (c) ExtendedIndicator + OnCumulativeTrade acumulado por sessão
+            int     tickCount  = Math.Max(1, (int)Math.Round((priceHi - priceLo) / tick) + 1);
+            decimal askPerTick = Math.Max(0m, (candle.Volume + candle.Delta) / 2m) / tickCount;
+            decimal bidPerTick = Math.Max(0m, (candle.Volume - candle.Delta) / 2m) / tickCount;
+
             for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
             {
-                // ⚠ VERIFICAR ——————————————————————————————————————————————————
-                // API do DataProvider para volume bid/ask por price level em SDK 10.
-                //
-                // Opção A (mais provável — API directa):
-                //   decimal ask = DataProvider.GetAskVolume(bar, p);
-                //   decimal bid = DataProvider.GetBidVolume(bar, p);
-                //
-                // Opção B (via cluster/footprint):
-                //   var cl  = DataProvider.GetCandleCluster(bar);
-                //   decimal ask = cl?.GetAskVolume(p) ?? 0m;
-                //   decimal bid = cl?.GetBidVolume(p) ?? 0m;
-                //
-                // Substitui as duas linhas abaixo pelo par correcto após verificar
-                // a interface IDataProvider no SDK 10:
-                decimal ask = DataProvider.GetAskVolume(bar, p); // ⚠ VERIFICAR
-                decimal bid = DataProvider.GetBidVolume(bar, p); // ⚠ VERIFICAR
-                // —————————————————————————————————————————————————————————————
-
+                // TODO: substituir por lookup real de footprint quando API identificada
+                decimal ask   = askPerTick;
+                decimal bid   = bidPerTick;
                 decimal total = ask + bid;
                 if (total <= 0) continue;
 
@@ -741,22 +741,24 @@ namespace ATAS.Indicators.Custom
         // Converte índice de candle → coordenada X em pixels
         private int GetBarX(int barIndex)
         {
-            // ⚠ VERIFICAR — método correcto em IChartInfo / SDK 10:
-            //   ChartInfo.GetXCoordinate(barIndex)
-            //   ChartInfo.PriceChartContainer.GetXCoordinate(barIndex)
-            //   ChartInfo.GetXCoordinate(barIndex, out int barWidth)  (variante com largura)
-            return (int)ChartInfo.GetXCoordinate(barIndex); // ⚠ VERIFICAR
+            // IChart (ChartInfo) não tem GetXCoordinate — está no PriceChartContainer.
+            // ⚠ VERIFICAR nome exacto do método no tipo de PriceChartContainer em SDK 10:
+            //   .GetXCoordinate(barIndex)
+            //   .GetX(barIndex)
+            //   .GetBarBounds(barIndex).X
+            return (int)ChartInfo.PriceChartContainer.GetXCoordinate(barIndex); // ⚠ VERIFICAR
         }
 
-        // Converte preço → coordenada Y em pixels
-        // Em ATAS, Y cresce para baixo; preços maiores têm Y menor (mais acima).
+        // Converte preço → coordenada Y em pixels.
+        // Em ATAS, Y cresce para baixo; preços maiores têm Y menor (mais acima no ecrã).
         private int PriceToY(decimal price)
         {
-            // ⚠ VERIFICAR — método correcto em IChartInfo / SDK 10:
-            //   ChartInfo.GetYCoordinate(price)
-            //   ChartInfo.GetYByPrice(price, false)
-            //   ChartInfo.PriceChartContainer.GetYByPrice(price)
-            return (int)ChartInfo.GetYCoordinate(price); // ⚠ VERIFICAR
+            // IChart (ChartInfo) não tem GetYCoordinate — está no PriceChartContainer.
+            // ⚠ VERIFICAR nome exacto do método no tipo de PriceChartContainer em SDK 10:
+            //   .GetYByPrice(price)
+            //   .GetY(price)
+            //   .GetYCoordinate(price)
+            return (int)ChartInfo.PriceChartContainer.GetYByPrice(price); // ⚠ VERIFICAR
         }
 
         // Calcula o rectângulo (em pixels) de um price level [price, price+tick[
