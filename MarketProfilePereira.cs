@@ -98,7 +98,11 @@ namespace ATAS.Indicators.Custom
         [Display(Name = "Profile Type",
                  Description = "Volume: barras de volume total. VolumeDelta: volume (direita) + delta bid/ask (esquerda).",
                  GroupName = "Profile", Order = 1)]
-        public ProfileType ProfileType { get; set; } = ProfileType.Volume;
+        public ProfileType ProfileType
+        {
+            get => _profileType;
+            set { _profileType = value; RecalculateValues(); }
+        }
 
         [Display(Name = "Largura máxima (% do range da sessão)",
                  Description = "Percentagem do range X da sessão que as barras do perfil podem ocupar.",
@@ -109,29 +113,49 @@ namespace ATAS.Indicators.Custom
 
         [Display(Name = "Sessão",
                  GroupName = "Sessions", Order = 10)]
-        public SessionPreset Session { get; set; } = SessionPreset.NewYork;
+        public SessionPreset Session
+        {
+            get => _session;
+            set { _session = value; RecalculateValues(); }
+        }
 
         [Display(Name = "Custom Start (HH:mm)",
                  Description = "Hora de início da sessão custom, em UTC. Formato HH:mm.",
                  GroupName = "Sessions", Order = 11)]
-        public string CustomStart { get; set; } = "13:30";
+        public string CustomStart
+        {
+            get => _customStart;
+            set { _customStart = value; RecalculateValues(); }
+        }
 
         [Display(Name = "Custom End (HH:mm)",
                  Description = "Hora de fim da sessão custom, em UTC. Formato HH:mm.",
                  GroupName = "Sessions", Order = 12)]
-        public string CustomEnd { get; set; } = "20:00";
+        public string CustomEnd
+        {
+            get => _customEnd;
+            set { _customEnd = value; RecalculateValues(); }
+        }
 
         [Display(Name = "Sessões a mostrar",
                  Description = "Número de sessões históricas a desenhar (+ a sessão actual).",
                  GroupName = "Sessions", Order = 13)]
-        public int SessionsToShow { get; set; } = 3;
+        public int SessionsToShow
+        {
+            get => _sessionsToShow;
+            set { _sessionsToShow = value; RecalculateValues(); }
+        }
 
         // --- Value Area ---
 
         // "ValueAreaPercent" já existe na classe base Indicator — usar nome diferente
         [Display(Name = "Value Area %",
                  GroupName = "Value Area", Order = 20)]
-        public decimal VAPercent { get; set; } = 70m;
+        public decimal VAPercent
+        {
+            get => _vaPercent;
+            set { _vaPercent = value; RecalculateValues(); }
+        }
 
         [Display(Name = "VAH / VAL modo",
                  Description = "Linha = linha horizontal tracejada. Zona = rectângulo semi-transparente.",
@@ -199,6 +223,14 @@ namespace ATAS.Indicators.Custom
         // =====================================================================
         //  Estado interno
         // =====================================================================
+
+        // Backing fields para propriedades que forçam RecalculateValues()
+        private ProfileType    _profileType    = ProfileType.Volume;
+        private SessionPreset  _session        = SessionPreset.NewYork;
+        private string         _customStart    = "13:30";
+        private string         _customEnd      = "20:00";
+        private int            _sessionsToShow = 3;
+        private decimal        _vaPercent      = 70m;
 
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
@@ -710,7 +742,7 @@ namespace ATAS.Indicators.Custom
             context.FillRectangle(CorPOC, new Rectangle(x1, pocY - 1, x2 - x1, 2));
 
             // POCs secundários — linha tracejada fina
-            if (session.SecondaryPOCs.Count > 0)
+            if (MostrarPOCsSecundarios && session.SecondaryPOCs.Count > 0)
             {
                 var dpen = new RenderPen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash };
                 foreach (decimal sp in session.SecondaryPOCs)
