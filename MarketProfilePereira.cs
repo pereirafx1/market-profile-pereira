@@ -127,9 +127,10 @@ namespace ATAS.Indicators.Custom
 
         // --- Value Area ---
 
+        // "ValueAreaPercent" já existe na classe base Indicator — usar nome diferente
         [Display(Name = "Value Area %",
                  GroupName = "Value Area", Order = 20)]
-        public decimal ValueAreaPercent { get; set; } = 70m;
+        public decimal VAPercent { get; set; } = 70m;
 
         [Display(Name = "VAH / VAL modo",
                  Description = "Linha = linha horizontal tracejada. Zona = rectângulo semi-transparente.",
@@ -469,7 +470,7 @@ namespace ATAS.Indicators.Custom
             int pocIdx = levels.FindIndex(kvp => kvp.Key == session.POC);
             if (pocIdx < 0) return;
 
-            decimal target      = session.TotalVolume * (ValueAreaPercent / 100m);
+            decimal target      = session.TotalVolume * (VAPercent / 100m);
             decimal accumulated = levels[pocIdx].Value.TotalVolume;
             int lo = pocIdx, hi = pocIdx;
 
@@ -544,7 +545,7 @@ namespace ATAS.Indicators.Custom
         //  Rendering
         // =====================================================================
 
-        public override void OnRender(RenderContext context, DrawingLayouts layout)
+        protected override void OnRender(RenderContext context, DrawingLayouts layout)
         {
             // ⚠ VERIFICAR — DrawingLayouts.Final: confirmar que este valor existe em SDK 10.
             // Alternativas comuns: DrawingLayouts.LatestBar, DrawingLayouts.Historical.
