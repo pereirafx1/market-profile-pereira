@@ -700,32 +700,51 @@ namespace ATAS.Indicators.Custom
             decimal tick = InstrumentInfo.TickSize;
             if (tick <= 0) tick = 0.01m;
 
-            var region = ChartInfo.PriceChartContainer.Region;
+            var region    = ChartInfo.PriceChartContainer.Region;
+            int viewLeft  = region.Left;
+            int viewRight = region.Right;
+            if (viewRight <= viewLeft) return;
 
-            // Estima a primeira barra visível a partir da largura de uma barra em píxeis.
-            // GetXByBar retorna 0 para barras fora do ecrã, o que colapsa o range quando
-            // a sessão está mais larga do que o viewport (zoom elevado).
-            int lastVisible = CurrentBar - 1;
-            int xLast       = lastVisible >= 1 ? GetBarX(lastVisible)     : region.Right;
-            int xPrev       = lastVisible >= 2 ? GetBarX(lastVisible - 1) : region.Left;
-            int barPxW      = Math.Max(1, Math.Abs(xLast - xPrev));
-            int visCount    = Math.Max(1, (region.Right - region.Left) / barPxW);
-            int firstVisible = Math.Max(0, lastVisible - visCount - 2); // +2 de margem
+            // GetBarX devolve 0 para barras fora do ecrã (qualquer lado).
+            // Em vez de estimar firstVisible (que falha quando as barras são sub-pixel),
+            // determinamos x1/x2 directamente a partir dos X reais dos extremos da sessão.
+            int xStart = GetBarX(session.StartBar);
+            int xEnd   = GetBarX(session.EndBar);
 
-            // Sessão completamente fora do viewport — não desenha
-            if (session.EndBar < firstVisible || session.StartBar > lastVisible) return;
+            int x1, x2;
 
-            int x1 = session.StartBar >= firstVisible
-                ? GetBarX(session.StartBar)
-                : region.Left;
-            int x2 = session.EndBar <= lastVisible
-                ? GetBarX(session.EndBar)
-                : region.Right;
+            if (xStart != 0 && xEnd != 0)
+            {
+                // Ambos os extremos estão no ecrã — posições exactas.
+                x1 = Math.Min(xStart, xEnd);
+                x2 = Math.Max(xStart, xEnd);
+            }
+            else if (xStart == 0 && xEnd != 0)
+            {
+                // Início fora do ecrã à esquerda; fim visível — cortar à borda esquerda.
+                x1 = viewLeft;
+                x2 = xEnd;
+            }
+            else if (xStart != 0)   // xEnd == 0
+            {
+                // Início visível; fim fora do ecrã à direita — cortar à borda direita.
+                x1 = xStart;
+                x2 = viewRight;
+            }
+            else
+            {
+                // Ambos fora do ecrã. Dois casos possíveis:
+                //   A) Sessão abrange todo o viewport (zoom muito elevado) → desenhar largura total.
+                //   B) Sessão completamente fora do viewport → não desenhar.
+                // Distinguir verificando o bar do meio da sessão.
+                int xMid = GetBarX((session.StartBar + session.EndBar) / 2);
+                if (xMid == 0) return;  // completamente fora do ecrã
+                x1 = viewLeft;
+                x2 = viewRight;
+            }
 
-            if (x2 < x1) { int tmp = x1; x1 = x2; x2 = tmp; }
-
-            x1 = Math.Max(x1, region.Left);
-            x2 = Math.Min(x2, region.Right);
+            x1 = Math.Max(x1, viewLeft);
+            x2 = Math.Min(x2, viewRight);
             if (x1 >= x2) return;
 
             int totalWidth  = Math.Max(2, x2 - x1);
