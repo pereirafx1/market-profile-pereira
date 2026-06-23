@@ -131,9 +131,7 @@ namespace ATAS.Indicators.Custom
             set
             {
                 _profileLayer = value;
-                // Repor sempre para false ao mudar de modo.
-                // OnRender gere a comutação true/false para PorCima dinamicamente.
-                DrawAbovePrice = false;
+                DrawAbovePrice = (value == ProfileLayer.PorCima);
             }
         }
 
@@ -674,35 +672,10 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // Z-order dinâmico para PorCima:
-            //   • DrawAbovePrice=true  → ATAS chama OnRender no passe Final (acima das candles)
-            //                            MAS para de chamar quando a barra atual sai do ecrã
-            //   • DrawAbovePrice=false → ATAS chama OnRender sempre (mesmo em histórico)
-            //                            MAS fica abaixo das candles
-            //
-            // Solução: comutar dinamicamente em cada frame com base em GetBarX(CurrentBar).
-            //   ▸ Barra atual visível  → DrawAbovePrice=true  (acima das candles)
-            //   ▸ Barra atual fora     → DrawAbovePrice=false (nunca perde o OnRender)
-            if (ProfileLayer == ProfileLayer.PorCima)
-            {
-                bool curVisible = CurrentBar >= 0 && GetBarX(CurrentBar) != 0;
-
-                if (curVisible && !DrawAbovePrice)
-                {
-                    DrawAbovePrice = true;   // voltou ao ecrã — reativar acima-das-candles
-                    return;                  // ATAS vai re-chamar no passe Final
-                }
-                if (!curVisible && DrawAbovePrice)
-                    DrawAbovePrice = false;  // saiu do ecrã — manter OnRender ativo
-
-                // Quando DrawAbovePrice=true só desenhamos no passe Final (acima das candles).
-                // Quando false (histórico) desenhamos em qualquer passe que o ATAS envie.
-                if (DrawAbovePrice && layout != DrawingLayouts.Final) return;
-            }
-            else // PorTras
-            {
-                if (layout == DrawingLayouts.Final) return;
-            }
+            // DrawAbovePrice controla o Z-order (acima/abaixo das candles).
+            // É definido no setter: true para PorCima, false para PorTras.
+            // Sem filtro de layout — o ATAS também chama com DrawingLayouts.Final
+            // durante zoom/scroll e filtrar esse passe causava desaparecimento.
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
