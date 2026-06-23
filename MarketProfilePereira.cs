@@ -130,8 +130,11 @@ namespace ATAS.Indicators.Custom
             get => _profileLayer;
             set
             {
-                _profileLayer        = value;
-                DrawAbovePrice       = (value == ProfileLayer.PorCima);
+                _profileLayer = value;
+                // Não usar DrawAbovePrice=true: o ATAS para de chamar OnRender quando
+                // a barra atual sai do ecrã, causando desaparecimento do profile em
+                // modo histórico. Com DrawAbovePrice=false o OnRender é sempre chamado.
+                // O efeito visual "por cima" é obtido desenhando no passe DrawingLayouts.Final.
             }
         }
 
@@ -285,7 +288,7 @@ namespace ATAS.Indicators.Custom
         {
             EnableCustomDrawing = true;
             DenyToChangePanel   = true;
-            DrawAbovePrice      = false; // Tentativa 1: propriedade da classe base para layer acima das candles
+            DrawAbovePrice      = false; // Sempre false — DrawAbovePrice=true impede OnRender em modo histórico
         }
 
         // =====================================================================
@@ -672,10 +675,15 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // Layer order (atrás vs. à frente das candles) controlado por DrawAbovePrice,
-            // que é definido no setter de ProfileLayer. Não filtramos por layout aqui porque
-            // o ATAS chama OnRender com DrawingLayouts.Final durante zoom/scroll sobre o chart,
-            // e filtrar esse layout causa o desaparecimento do profile nessa interação.
+            // DrawAbovePrice está sempre false para garantir que OnRender é chamado mesmo
+            // em modo histórico (ATAS para de chamar OnRender quando DrawAbovePrice=true
+            // e a barra atual sai do ecrã).
+            //
+            // Z-order manual via layout:
+            //   PorTras  → não desenha no passe Final (fica atrás das candles)
+            //   PorCima  → desenha APENAS no passe Final (o último passe = acima de tudo)
+            if (ProfileLayer == ProfileLayer.PorTras  && layout == DrawingLayouts.Final) return;
+            if (ProfileLayer == ProfileLayer.PorCima  && layout != DrawingLayouts.Final) return;
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
