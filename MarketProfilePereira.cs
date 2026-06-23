@@ -734,18 +734,31 @@ namespace ATAS.Indicators.Custom
             }
             else
             {
-                // Ambos fora do ecrã. Dois casos possíveis:
+                // Ambos fora do ecrã. Dois casos:
                 //   A) Sessão abrange o viewport (StartBar fora à esq., EndBar fora à dir.) → largura total.
                 //   B) Sessão completamente fora do viewport → não desenhar.
-                // Um único ponto central falha quando o viewport está na metade posterior da sessão
-                // (o ponto central fica fora à esquerda e GetBarX devolve 0 incorrectamente).
-                // Solução: amostrar 15 pontos igualmente espaçados — qualquer janela > 1/16 da
-                // duração da sessão garante que pelo menos um ponto cai dentro do viewport.
+                //
+                // As 15 amostras uniformes (k/16) cobrem o intervalo [range/16 .. range*15/16].
+                // Ficam sem cobertura o primeiro e o último 1/16 da sessão: quando o viewport
+                // está nessa zona (ex.: últimas barras de um Daily a muito zoom), todos os 15
+                // pontos ficam fora do ecrã e a sessão parece invisível.
+                //
+                // Solução: combinar amostras próximas dos extremos (fecha as lacunas)
+                // com as 15 amostras interiores (cobre a parte central).
                 int range = session.EndBar - session.StartBar;
                 if (range <= 0) return;
                 bool found = false;
+                int margin = Math.Max(1, range / 16 + 1); // cobre exatamente a lacuna de cada extremo
+
+                // Verificação junto aos extremos (fecha o 1/16 inicial e o 1/16 final)
+                for (int d = 1; d <= margin && !found; d++)
+                    found = GetBarX(session.StartBar + d) != 0 ||
+                            GetBarX(session.EndBar   - d) != 0;
+
+                // Amostras uniformes no interior (cobre os 14/16 centrais)
                 for (int k = 1; k <= 15 && !found; k++)
                     found = GetBarX(session.StartBar + (int)((long)range * k / 16)) != 0;
+
                 if (!found) return;
                 x1 = viewLeft;
                 x2 = viewRight;
