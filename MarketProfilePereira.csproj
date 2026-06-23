@@ -18,7 +18,8 @@
   -->
   <ItemGroup>
     <!-- System.Drawing.Common: necessário em .NET 10 para Pen, DashStyle, Bitmap, etc. -->
-    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <!-- Versão 10.0.0 para alinhar com a que os DLLs do ATAS dependem -->
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
   </ItemGroup>
 
   <ItemGroup>

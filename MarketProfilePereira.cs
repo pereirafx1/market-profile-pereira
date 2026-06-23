@@ -18,6 +18,7 @@ using System.Linq;
 using ATAS.Indicators;
 using OFT.Rendering.Context;   // ⚠ VERIFICAR — namespace exacto em SDK 10
 using OFT.Rendering.Settings;  // ⚠ VERIFICAR — namespace onde vive DrawingLayouts
+using OFT.Rendering.Tools;     // RenderPen (o DrawLine do RenderContext não aceita System.Drawing.Pen)
 
 namespace ATAS.Indicators.Custom
 {
@@ -692,18 +693,19 @@ namespace ATAS.Indicators.Custom
 
             // POC principal — linha sólida, 2px
             int pocY = PriceToY(session.POC + tick * 0.5m);
-            using (var pen = new Pen(CorPOC, 2f))
-                context.DrawLine(pen, x1, pocY, x2, pocY); // ⚠ VERIFICAR
+            using (var pen = new RenderPen(CorPOC, 2f))
+                context.DrawLine(pen, x1, pocY, x2, pocY); // ⚠ VERIFICAR assinatura exacta
 
             // POCs secundários — linha tracejada fina
             if (MarcarPOCsSecundarios && session.SecondaryPOCs.Count > 0)
             {
-                using (var dpen = new Pen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash })
+                // ⚠ VERIFICAR se RenderPen tem DashStyle; se não, implementar traço manual
+                using (var dpen = new RenderPen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash })
                 {
                     foreach (decimal sp in session.SecondaryPOCs)
                     {
                         int sy = PriceToY(sp + tick * 0.5m);
-                        context.DrawLine(dpen, x1, sy, x2, sy); // ⚠ VERIFICAR
+                        context.DrawLine(dpen, x1, sy, x2, sy); // ⚠ VERIFICAR assinatura exacta
                     }
                 }
             }
@@ -715,8 +717,9 @@ namespace ATAS.Indicators.Custom
             if (VahValMode == VahValModo.Linha)
             {
                 int y = PriceToY(price + tick * 0.5m);
-                using (var pen = new Pen(color, 1f) { DashStyle = DashStyle.Dash })
-                    context.DrawLine(pen, x1, y, x2, y); // ⚠ VERIFICAR
+                // ⚠ VERIFICAR se RenderPen tem DashStyle; se não, implementar traço manual
+                using (var pen = new RenderPen(color, 1f) { DashStyle = DashStyle.Dash })
+                    context.DrawLine(pen, x1, y, x2, y); // ⚠ VERIFICAR assinatura exacta
             }
             else // Zona
             {
@@ -741,24 +744,23 @@ namespace ATAS.Indicators.Custom
         // Converte índice de candle → coordenada X em pixels
         private int GetBarX(int barIndex)
         {
-            // IChart (ChartInfo) não tem GetXCoordinate — está no PriceChartContainer.
-            // ⚠ VERIFICAR nome exacto do método no tipo de PriceChartContainer em SDK 10:
-            //   .GetXCoordinate(barIndex)
+            // IChartContainer (PriceChartContainer) não tem GetXCoordinate.
+            // Por simetria com GetYByPrice, tentar GetXByBar.
+            // ⚠ VERIFICAR nome exacto do método em IChartContainer no SDK 10:
+            //   .GetXByBar(barIndex)
             //   .GetX(barIndex)
-            //   .GetBarBounds(barIndex).X
-            return (int)ChartInfo.PriceChartContainer.GetXCoordinate(barIndex); // ⚠ VERIFICAR
+            //   .GetXCoordinate(barIndex)
+            return (int)ChartInfo.PriceChartContainer.GetXByBar(barIndex); // ⚠ VERIFICAR
         }
 
         // Converte preço → coordenada Y em pixels.
         // Em ATAS, Y cresce para baixo; preços maiores têm Y menor (mais acima no ecrã).
         private int PriceToY(decimal price)
         {
-            // IChart (ChartInfo) não tem GetYCoordinate — está no PriceChartContainer.
-            // ⚠ VERIFICAR nome exacto do método no tipo de PriceChartContainer em SDK 10:
-            //   .GetYByPrice(price)
-            //   .GetY(price)
-            //   .GetYCoordinate(price)
-            return (int)ChartInfo.PriceChartContainer.GetYByPrice(price); // ⚠ VERIFICAR
+            // IChartContainer.GetYByPrice confirmado por CS7036 — precisa de 2 parâmetros:
+            //   (decimal price, bool isStartOfPriceLevel)
+            // false = Y do meio/topo do price level (usar para o traço do indicador)
+            return (int)ChartInfo.PriceChartContainer.GetYByPrice(price, false);
         }
 
         // Calcula o rectângulo (em pixels) de um price level [price, price+tick[
