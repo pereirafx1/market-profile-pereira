@@ -132,6 +132,7 @@ namespace ATAS.Indicators.Custom
             {
                 _profileLayer = value;
                 DrawAbovePrice = (value == ProfileLayer.PorCima);
+                SetWatchdog(value == ProfileLayer.PorCima);
             }
         }
 
@@ -277,9 +278,11 @@ namespace ATAS.Indicators.Custom
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
 
-        // Timestamp da última chamada a OnRender (Stopwatch ticks).
-        // Usado para detetar quando o ATAS para de chamar OnRender (DrawAbovePrice=true + barra atual fora do ecrã).
-        private long _lastRenderTick;
+        // Watchdog para PorCima: System.Threading.Timer dispara mesmo quando o ATAS suprime OnRender.
+        // Quando DrawAbovePrice=true e OnRender não é chamado há >150ms, a barra atual saiu
+        // do ecrã → repõe DrawAbovePrice=false para o ATAS voltar a chamar OnRender.
+        private System.Threading.Timer _watchdog;
+        private volatile long          _lastRenderTick;
 
         // =====================================================================
         //  Construtor
@@ -300,6 +303,37 @@ namespace ATAS.Indicators.Custom
             _sessions.Clear();
             _currentSession = null;
             _lastRenderTick = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            // Criar/reiniciar watchdog; só corre quando ProfileLayer == PorCima
+            _watchdog?.Dispose();
+            _watchdog = new System.Threading.Timer(WatchdogTick, null,
+                System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            SetWatchdog(ProfileLayer == ProfileLayer.PorCima);
+        }
+
+        private void SetWatchdog(bool enable)
+        {
+            int delay = enable ? 150 : System.Threading.Timeout.Infinite;
+            try { _watchdog?.Change(delay, 150); } catch { }
+        }
+
+        private void WatchdogTick(object state)
+        {
+            if (!DrawAbovePrice || ProfileLayer != ProfileLayer.PorCima) return;
+            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - _lastRenderTick)
+                        * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            if (ms > 150)
+                DrawAbovePrice = false; // barra atual fora do ecrã → ATAS volta a chamar OnRender
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _watchdog?.Dispose();
+                _watchdog = null;
+            }
+            base.Dispose(disposing);
         }
 
         protected override void OnCalculate(int bar, decimal value)
@@ -309,19 +343,6 @@ namespace ATAS.Indicators.Custom
             {
                 _sessions.Clear();
                 _currentSession = null;
-            }
-
-            // Detetar quando o ATAS para de chamar OnRender (DrawAbovePrice=true + barra atual fora do ecrã).
-            // OnCalculate continua a ser chamado com cada tick mesmo em vista histórica,
-            // por isso serve de "watchdog": se DrawAbovePrice=true e OnRender não foi
-            // chamado há >500 ms, a barra atual saiu do ecrã — repor para false para que
-            // o ATAS volte a chamar OnRender e os profiles fiquem visíveis.
-            if (bar == CurrentBar && ProfileLayer == ProfileLayer.PorCima && DrawAbovePrice)
-            {
-                long now = System.Diagnostics.Stopwatch.GetTimestamp();
-                double ms = (now - _lastRenderTick) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-                if (ms > 500)
-                    DrawAbovePrice = false;
             }
 
             var candle = GetCandle(bar);
