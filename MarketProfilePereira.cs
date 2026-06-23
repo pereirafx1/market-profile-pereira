@@ -125,7 +125,15 @@ namespace ATAS.Indicators.Custom
         [Display(Name = "Layer",
                  Description = "PorTras = profile desenhado atrás das candles. PorCima = por cima de tudo.",
                  GroupName = "Profile", Order = 3)]
-        public ProfileLayer ProfileLayer { get; set; } = ProfileLayer.PorTras;
+        public ProfileLayer ProfileLayer
+        {
+            get => _profileLayer;
+            set
+            {
+                _profileLayer        = value;
+                DrawAbovePrice       = (value == ProfileLayer.PorCima);
+            }
+        }
 
         [Display(Name = "Opacidade do profile (0–100)",
                  Description = "Aplica-se a todas as barras, linhas e zonas do profile.",
@@ -257,6 +265,7 @@ namespace ATAS.Indicators.Custom
         // =====================================================================
 
         // Backing fields para propriedades que forçam RecalculateValues()
+        private ProfileLayer   _profileLayer   = ProfileLayer.PorTras;
         private ProfileType    _profileType    = ProfileType.Volume;
         private SessionPreset  _session        = SessionPreset.NewYork;
         private CustomTZ       _customTimezone = CustomTZ.NewYork;
@@ -274,8 +283,9 @@ namespace ATAS.Indicators.Custom
 
         public MarketProfilePereira()
         {
-            EnableCustomDrawing = true;  // ⚠ VERIFICAR — nome exacto da propriedade em SDK 10
-            DenyToChangePanel   = true;  // ⚠ VERIFICAR — mantém o indicador no painel de preços
+            EnableCustomDrawing = true;
+            DenyToChangePanel   = true;
+            DrawAbovePrice      = false; // Tentativa 1: propriedade da classe base para layer acima das candles
         }
 
         // =====================================================================
