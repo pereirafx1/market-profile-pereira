@@ -670,9 +670,10 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // PorTras: só desenha nos layers de fundo (exclui Final que nunca é chamado pelo ATAS).
-            // PorCima: sem filtro — desenha em todos os passes; o último compose fica sobre as candles.
-            if (ProfileLayer == ProfileLayer.PorTras && layout == DrawingLayouts.Final) return;
+            // Layer order (atrás vs. à frente das candles) controlado por DrawAbovePrice,
+            // que é definido no setter de ProfileLayer. Não filtramos por layout aqui porque
+            // o ATAS chama OnRender com DrawingLayouts.Final durante zoom/scroll sobre o chart,
+            // e filtrar esse layout causa o desaparecimento do profile nessa interação.
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
