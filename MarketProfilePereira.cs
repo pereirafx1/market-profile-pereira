@@ -705,7 +705,7 @@ namespace ATAS.Indicators.Custom
             // Quando a sessão começa ou termina fora do viewport, GetXByBar devolve 0
             // (valor inválido). Usamos o índice da primeira barra visível para detectar
             // quais extremos estão fora do ecrã e usar as bordas do viewport nesses casos.
-            int firstVisible = ChartInfo.FirstVisibleBarNumber;
+            int firstVisible = ChartInfo.FirstVisibleBarIndex;
             int lastVisible  = CurrentBar - 1;
 
             // Sessão completamente fora do viewport — não desenha
