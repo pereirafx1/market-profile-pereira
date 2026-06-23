@@ -363,44 +363,25 @@ namespace ATAS.Indicators.Custom
             decimal tick = InstrumentInfo.TickSize;
             if (tick <= 0) tick = 0.01m;
 
-            var  contrib      = new Dictionary<decimal, PriceLevelData>();
-            bool hasFootprint = false;
+            var contrib = new Dictionary<decimal, PriceLevelData>();
 
-            // ⚠ VERIFICAR — IndicatorCandle.Volumes: SortedDictionary<decimal, CandleVolumeInfo>
-            // onde CandleVolumeInfo tem .Ask (decimal) e .Bid (decimal) por price level.
-            // Este é o modo correcto — usa dados reais do footprint/cluster.
-            // Se não compilar, verificar o tipo exacto em SDK 10 (pode ser VolumesInfo, VolumeInfo, etc.)
-            var vols = candle.Volumes; // ⚠ VERIFICAR — nome e tipo exacto da propriedade
-            if (vols != null && vols.Count > 0)
+            // ⚠ VERIFICAR — footprint real por price level.
+            // IndicatorCandle.Volumes não existe em SDK 10. Substituir o bloco abaixo
+            // pelo padrão correcto do SDK 10 assim que confirmado (ex: DataProvider, cast, etc.).
+            // Por agora usa distribuição uniforme: delta de cada nível = delta_total / n_ticks.
+            // Resultado: o perfil de delta terá a mesma forma que o volume; as zonas vão diferir
+            // do perfil nativo do ATAS até que a API de footprint correcta seja ligada aqui.
+            decimal priceLo = RoundToTick(candle.Low,  tick);
+            decimal priceHi = RoundToTick(candle.High, tick);
+            int     ticks   = Math.Max(1, (int)Math.Round((priceHi - priceLo) / tick) + 1);
+            decimal askPerT = Math.Max(0m, (candle.Volume + candle.Delta) / 2m) / ticks;
+            decimal bidPerT = Math.Max(0m, (candle.Volume - candle.Delta) / 2m) / ticks;
+
+            for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
             {
-                hasFootprint = true;
-                foreach (var kvp in vols)
-                {
-                    decimal p   = RoundToTick(kvp.Key, tick);
-                    decimal ask = Math.Max(0m, kvp.Value.Ask); // ⚠ VERIFICAR — nome da prop Ask
-                    decimal bid = Math.Max(0m, kvp.Value.Bid); // ⚠ VERIFICAR — nome da prop Bid
-                    decimal tot = ask + bid;
-                    if (tot <= 0) continue;
-                    AccumulateLevel(session, contrib, p, ask, bid, tot);
-                }
-            }
-
-            if (!hasFootprint)
-            {
-                // FALLBACK: distribui volume/delta uniformemente pelo range High-Low.
-                // Apenas activado quando candle.Volumes não está disponível.
-                decimal priceLo = RoundToTick(candle.Low,  tick);
-                decimal priceHi = RoundToTick(candle.High, tick);
-                int     ticks   = Math.Max(1, (int)Math.Round((priceHi - priceLo) / tick) + 1);
-                decimal askPerT = Math.Max(0m, (candle.Volume + candle.Delta) / 2m) / ticks;
-                decimal bidPerT = Math.Max(0m, (candle.Volume - candle.Delta) / 2m) / ticks;
-
-                for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
-                {
-                    decimal tot = askPerT + bidPerT;
-                    if (tot <= 0) continue;
-                    AccumulateLevel(session, contrib, p, askPerT, bidPerT, tot);
-                }
+                decimal tot = askPerT + bidPerT;
+                if (tot <= 0) continue;
+                AccumulateLevel(session, contrib, p, askPerT, bidPerT, tot);
             }
 
             session.LastBarContrib = contrib;
