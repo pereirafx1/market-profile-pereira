@@ -41,6 +41,16 @@ namespace ATAS.Indicators.Custom
         Custom
     }
 
+    public enum CustomTZ
+    {
+        UTC,
+        NewYork,
+        London,
+        Frankfurt,
+        Tokyo,
+        Sydney
+    }
+
     public enum VahValModo { Linha, Zona }
 
     // =========================================================================
@@ -120,9 +130,18 @@ namespace ATAS.Indicators.Custom
             set { _session = value; RecalculateValues(); }
         }
 
-        [Display(Name = "Custom Start (HH:mm)",
-                 Description = "Hora de início da sessão custom, em UTC. Formato HH:mm.",
+        [Display(Name = "Custom — Timezone",
+                 Description = "Timezone das horas Custom Start / Custom End.",
                  GroupName = "Sessions", Order = 11)]
+        public CustomTZ CustomTimezone
+        {
+            get => _customTimezone;
+            set { _customTimezone = value; RecalculateValues(); }
+        }
+
+        [Display(Name = "Custom Start (HH:mm)",
+                 Description = "Hora de início da sessão custom. Formato HH:mm, no timezone acima.",
+                 GroupName = "Sessions", Order = 12)]
         public string CustomStart
         {
             get => _customStart;
@@ -130,8 +149,8 @@ namespace ATAS.Indicators.Custom
         }
 
         [Display(Name = "Custom End (HH:mm)",
-                 Description = "Hora de fim da sessão custom, em UTC. Formato HH:mm.",
-                 GroupName = "Sessions", Order = 12)]
+                 Description = "Hora de fim da sessão custom. Formato HH:mm, no timezone acima.",
+                 GroupName = "Sessions", Order = 13)]
         public string CustomEnd
         {
             get => _customEnd;
@@ -140,7 +159,7 @@ namespace ATAS.Indicators.Custom
 
         [Display(Name = "Sessões a mostrar",
                  Description = "Número de sessões históricas a desenhar (+ a sessão actual).",
-                 GroupName = "Sessions", Order = 13)]
+                 GroupName = "Sessions", Order = 14)]
         public int SessionsToShow
         {
             get => _sessionsToShow;
@@ -225,14 +244,12 @@ namespace ATAS.Indicators.Custom
         //  Estado interno
         // =====================================================================
 
-        private static readonly TimeZoneInfo _nyTZ =
-            TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
-
         // Backing fields para propriedades que forçam RecalculateValues()
         private ProfileType    _profileType    = ProfileType.Volume;
         private SessionPreset  _session        = SessionPreset.NewYork;
-        private string         _customStart    = "13:30";
-        private string         _customEnd      = "20:00";
+        private CustomTZ       _customTimezone = CustomTZ.NewYork;
+        private string         _customStart    = "09:30";
+        private string         _customEnd      = "16:00";
         private int            _sessionsToShow = 3;
         private decimal        _vaPercent      = 70m;
 
@@ -343,6 +360,23 @@ namespace ATAS.Indicators.Custom
             _currentSession = null;
         }
 
+        private static TimeZoneInfo GetCustomTzInfo(CustomTZ tz)
+        {
+            switch (tz)
+            {
+                case CustomTZ.NewYork:    return TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time");
+                case CustomTZ.London:     return TimeZoneInfo.FindSystemTimeZoneById("GMT Standard Time");
+                case CustomTZ.Frankfurt:  return TimeZoneInfo.FindSystemTimeZoneById("W. Europe Standard Time");
+                case CustomTZ.Tokyo:      return TimeZoneInfo.FindSystemTimeZoneById("Tokyo Standard Time");
+                case CustomTZ.Sydney:     return TimeZoneInfo.FindSystemTimeZoneById("AUS Eastern Standard Time");
+                default:                  return TimeZoneInfo.Utc;
+            }
+        }
+
+        // Converte um timestamp UTC para o timezone do Custom e devolve o DateTime local.
+        private DateTime ToCustomLocalTime(DateTime utcTime)
+            => TimeZoneInfo.ConvertTime(utcTime, GetCustomTzInfo(CustomTimezone));
+
         // Devolve true se o timestamp UTC da candle pertence à sessão configurada.
         private bool IsInCurrentSession(DateTime utcTime)
         {
@@ -350,9 +384,9 @@ namespace ATAS.Indicators.Custom
 
             if (Session == SessionPreset.Custom)
             {
-                DateTime nyTime = TimeZoneInfo.ConvertTime(utcTime, _nyTZ);
-                var (cs, ce)    = ParseCustomTimes();
-                return IsInSessionSpan(nyTime.TimeOfDay, cs, ce);
+                DateTime local   = ToCustomLocalTime(utcTime);
+                var (cs, ce)     = ParseCustomTimes();
+                return IsInSessionSpan(local.TimeOfDay, cs, ce);
             }
 
             var (s, e) = GetPresetSessionTimesUtc();
@@ -366,12 +400,11 @@ namespace ATAS.Indicators.Custom
 
             if (Session == SessionPreset.Custom)
             {
-                DateTime nyTime = TimeZoneInfo.ConvertTime(utcTime, _nyTZ);
-                var (cs, ce)    = ParseCustomTimes();
-                // Se a sessão atravessa meia-noite NY e estamos antes do fim, âncora = dia anterior NY
-                if (cs > ce && nyTime.TimeOfDay < ce)
-                    return nyTime.Date.AddDays(-1);
-                return nyTime.Date;
+                DateTime local = ToCustomLocalTime(utcTime);
+                var (cs, ce)   = ParseCustomTimes();
+                if (cs > ce && local.TimeOfDay < ce)
+                    return local.Date.AddDays(-1);
+                return local.Date;
             }
 
             var (s, e) = GetPresetSessionTimesUtc();
@@ -384,7 +417,7 @@ namespace ATAS.Indicators.Custom
         {
             if (TimeSpan.TryParse(CustomStart, out var cs) && TimeSpan.TryParse(CustomEnd, out var ce))
                 return (cs, ce);
-            return (new TimeSpan(9, 30, 0), new TimeSpan(16, 0, 0)); // fallback: horário NY regular
+            return (new TimeSpan(9, 30, 0), new TimeSpan(16, 0, 0));
         }
 
         private (TimeSpan start, TimeSpan end) GetPresetSessionTimesUtc()
