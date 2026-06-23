@@ -131,10 +131,9 @@ namespace ATAS.Indicators.Custom
             set
             {
                 _profileLayer = value;
-                // Não usar DrawAbovePrice=true: o ATAS para de chamar OnRender quando
-                // a barra atual sai do ecrã, causando desaparecimento do profile em
-                // modo histórico. Com DrawAbovePrice=false o OnRender é sempre chamado.
-                // O efeito visual "por cima" é obtido desenhando no passe DrawingLayouts.Final.
+                // PorCima começa com DrawAbovePrice=true para ficar acima das candles.
+                // OnRender faz comutação dinâmica para false quando a barra atual sai do ecrã.
+                DrawAbovePrice = (value == ProfileLayer.PorCima);
             }
         }
 
@@ -675,14 +674,35 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // DrawAbovePrice está sempre false: garante que OnRender é sempre chamado,
-            // mesmo quando a barra atual sai do ecrã (DrawAbovePrice=true impede isso).
+            // Z-order dinâmico para PorCima:
+            //   • DrawAbovePrice=true  → ATAS chama OnRender no passe Final (acima das candles)
+            //                            MAS para de chamar quando a barra atual sai do ecrã
+            //   • DrawAbovePrice=false → ATAS chama OnRender sempre (mesmo em histórico)
+            //                            MAS fica abaixo das candles
             //
-            // Z-order via layout:
-            //   PorTras → salta o passe Final para ficar atrás das candles
-            //   PorCima → sem filtro; com DrawAbovePrice=false o ATAS não chama Final,
-            //             por isso desenhar em qualquer passe garante visibilidade
-            if (ProfileLayer == ProfileLayer.PorTras && layout == DrawingLayouts.Final) return;
+            // Solução: comutar dinamicamente em cada frame com base em GetBarX(CurrentBar).
+            //   ▸ Barra atual visível  → DrawAbovePrice=true  (acima das candles)
+            //   ▸ Barra atual fora     → DrawAbovePrice=false (nunca perde o OnRender)
+            if (ProfileLayer == ProfileLayer.PorCima)
+            {
+                bool curVisible = CurrentBar >= 0 && GetBarX(CurrentBar) != 0;
+
+                if (curVisible && !DrawAbovePrice)
+                {
+                    DrawAbovePrice = true;   // voltou ao ecrã — reativar acima-das-candles
+                    return;                  // ATAS vai re-chamar no passe Final
+                }
+                if (!curVisible && DrawAbovePrice)
+                    DrawAbovePrice = false;  // saiu do ecrã — manter OnRender ativo
+
+                // Quando DrawAbovePrice=true só desenhamos no passe Final (acima das candles).
+                // Quando false (histórico) desenhamos em qualquer passe que o ATAS envie.
+                if (DrawAbovePrice && layout != DrawingLayouts.Final) return;
+            }
+            else // PorTras
+            {
+                if (layout == DrawingLayouts.Final) return;
+            }
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
