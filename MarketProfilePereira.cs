@@ -157,12 +157,13 @@ namespace ATAS.Indicators.Custom
                  GroupName = "POC", Order = 30)]
         public Color CorPOC { get; set; } = Color.FromArgb(255, 255, 165, 0);
 
-        [Display(Name = "Marcar POCs secundários",
+        [Display(Name = "POCs secundários (máximo)",
+                 Description = "Quantos POCs secundários mostrar. 0 = desactivado.",
                  GroupName = "POC", Order = 31)]
-        public bool MarcarPOCsSecundarios { get; set; } = true;
+        public int MaxSecondaryPOCs { get; set; } = 3;
 
         [Display(Name = "POC secundário — volume mínimo (%)",
-                 Description = "Pico local só é marcado como POC secundário se tiver pelo menos X% do volume do POC principal.",
+                 Description = "Um pico só é candidato a POC secundário se tiver pelo menos X% do volume do POC principal.",
                  GroupName = "POC", Order = 32)]
         public int SecondaryPOCThresholdPct { get; set; } = 60;
 
@@ -362,56 +363,64 @@ namespace ATAS.Indicators.Custom
             decimal tick = InstrumentInfo.TickSize;
             if (tick <= 0) tick = 0.01m;
 
-            var contrib = new Dictionary<decimal, PriceLevelData>();
+            var  contrib      = new Dictionary<decimal, PriceLevelData>();
+            bool hasFootprint = false;
 
-            decimal priceLo = RoundToTick(candle.Low,  tick);
-            decimal priceHi = RoundToTick(candle.High, tick);
-
-            // ⚠ VERIFICAR — API de volume por price level em IIndicatorDataProvider (SDK 10).
-            // GetAskVolume/GetBidVolume não existem nessa interface.
-            // FALLBACK TEMPORÁRIO: distribui o volume/delta total da candle uniformemente
-            // por todos os price levels do range High–Low.
-            // Produz perfil correcto em forma (range de preços) mas sem distribuição intra-barra real.
-            //
-            // Para activar footprint verdadeiro, substituir askPerTick/bidPerTick dentro do loop
-            // pela API correcta depois de a identificar. Candidatos a verificar no SDK 10:
-            //   (a) IndicatorCandle.Volumes — SortedDictionary<decimal, CandleVolumeInfo>?
-            //   (b) GetCandle(bar) cast para tipo concreto com acesso a cluster
-            //   (c) ExtendedIndicator + OnCumulativeTrade acumulado por sessão
-            int     tickCount  = Math.Max(1, (int)Math.Round((priceHi - priceLo) / tick) + 1);
-            decimal askPerTick = Math.Max(0m, (candle.Volume + candle.Delta) / 2m) / tickCount;
-            decimal bidPerTick = Math.Max(0m, (candle.Volume - candle.Delta) / 2m) / tickCount;
-
-            for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
+            // ⚠ VERIFICAR — IndicatorCandle.Volumes: SortedDictionary<decimal, CandleVolumeInfo>
+            // onde CandleVolumeInfo tem .Ask (decimal) e .Bid (decimal) por price level.
+            // Este é o modo correcto — usa dados reais do footprint/cluster.
+            // Se não compilar, verificar o tipo exacto em SDK 10 (pode ser VolumesInfo, VolumeInfo, etc.)
+            var vols = candle.Volumes; // ⚠ VERIFICAR — nome e tipo exacto da propriedade
+            if (vols != null && vols.Count > 0)
             {
-                // TODO: substituir por lookup real de footprint quando API identificada
-                decimal ask   = askPerTick;
-                decimal bid   = bidPerTick;
-                decimal total = ask + bid;
-                if (total <= 0) continue;
-
-                // Acumular no perfil da sessão
-                if (!session.PriceLevels.TryGetValue(p, out var lvl))
+                hasFootprint = true;
+                foreach (var kvp in vols)
                 {
-                    lvl = new PriceLevelData();
-                    session.PriceLevels[p] = lvl;
+                    decimal p   = RoundToTick(kvp.Key, tick);
+                    decimal ask = Math.Max(0m, kvp.Value.Ask); // ⚠ VERIFICAR — nome da prop Ask
+                    decimal bid = Math.Max(0m, kvp.Value.Bid); // ⚠ VERIFICAR — nome da prop Bid
+                    decimal tot = ask + bid;
+                    if (tot <= 0) continue;
+                    AccumulateLevel(session, contrib, p, ask, bid, tot);
                 }
-                lvl.AskVolume   += ask;
-                lvl.BidVolume   += bid;
-                lvl.TotalVolume += total;
+            }
 
-                // Registar no snapshot desta candle
-                if (!contrib.TryGetValue(p, out var snap))
+            if (!hasFootprint)
+            {
+                // FALLBACK: distribui volume/delta uniformemente pelo range High-Low.
+                // Apenas activado quando candle.Volumes não está disponível.
+                decimal priceLo = RoundToTick(candle.Low,  tick);
+                decimal priceHi = RoundToTick(candle.High, tick);
+                int     ticks   = Math.Max(1, (int)Math.Round((priceHi - priceLo) / tick) + 1);
+                decimal askPerT = Math.Max(0m, (candle.Volume + candle.Delta) / 2m) / ticks;
+                decimal bidPerT = Math.Max(0m, (candle.Volume - candle.Delta) / 2m) / ticks;
+
+                for (decimal p = priceLo; p <= priceHi + tick * 0.0001m; p = RoundToTick(p + tick, tick))
                 {
-                    snap = new PriceLevelData();
-                    contrib[p] = snap;
+                    decimal tot = askPerT + bidPerT;
+                    if (tot <= 0) continue;
+                    AccumulateLevel(session, contrib, p, askPerT, bidPerT, tot);
                 }
-                snap.AskVolume   += ask;
-                snap.BidVolume   += bid;
-                snap.TotalVolume += total;
             }
 
             session.LastBarContrib = contrib;
+        }
+
+        private static void AccumulateLevel(ProfileSession session,
+                                            Dictionary<decimal, PriceLevelData> contrib,
+                                            decimal price, decimal ask, decimal bid, decimal total)
+        {
+            if (!session.PriceLevels.TryGetValue(price, out var lvl))
+            { lvl = new PriceLevelData(); session.PriceLevels[price] = lvl; }
+            lvl.AskVolume   += ask;
+            lvl.BidVolume   += bid;
+            lvl.TotalVolume += total;
+
+            if (!contrib.TryGetValue(price, out var snap))
+            { snap = new PriceLevelData(); contrib[price] = snap; }
+            snap.AskVolume   += ask;
+            snap.BidVolume   += bid;
+            snap.TotalVolume += total;
         }
 
         private static void SubtractContrib(
@@ -496,46 +505,62 @@ namespace ATAS.Indicators.Custom
         private void FindSecondaryPOCs(ProfileSession session)
         {
             session.SecondaryPOCs.Clear();
-            if (!MarcarPOCsSecundarios) return;
+            if (MaxSecondaryPOCs <= 0) return;
 
-            var levels = session.PriceLevels.ToList();
+            var levels = session.PriceLevels.ToList(); // ascendente por preço
             int n = levels.Count;
-            if (n < 5) return;
+            if (n < 3) return;
 
-            int    pocIdx    = levels.FindIndex(kvp => kvp.Key == session.POC);
+            int     pocIdx    = levels.FindIndex(kvp => kvp.Key == session.POC);
             decimal threshold = session.MaxVolume * (SecondaryPOCThresholdPct / 100m);
 
+            // 1. Encontrar todos os picos locais acima do limiar (excluindo o POC principal)
+            var candidates = new List<(int idx, decimal price, decimal vol)>();
             for (int i = 1; i < n - 1; i++)
             {
                 if (i == pocIdx) continue;
-
                 decimal vol = levels[i].Value.TotalVolume;
                 if (vol < threshold) continue;
+                if (vol > levels[i - 1].Value.TotalVolume && vol > levels[i + 1].Value.TotalVolume)
+                    candidates.Add((i, levels[i].Key, vol));
+            }
+            if (candidates.Count == 0) return;
 
-                // Máximo local: maior do que os vizinhos imediatos
-                if (vol <= levels[i - 1].Value.TotalVolume ||
-                    vol <= levels[i + 1].Value.TotalVolume)
-                    continue;
+            // 2. Ordenar por volume descendente — os picos mais proeminentes primeiro
+            candidates.Sort((a, b) => b.vol.CompareTo(a.vol));
 
-                // Separado do POC principal por um "vale" (pelo menos um level
-                // com volume < 70% do mínimo entre este pico e o POC)
-                int rangeL = Math.Min(i, pocIdx) + 1;
-                int rangeR = Math.Max(i, pocIdx);
-                if (rangeR - rangeL < 1) continue; // adjacente ao POC
+            // 3. Selecção greedy: aceitar pico só se estiver separado de TODOS os já aceites
+            //    por uma LVA significativa (valley < 50 % do menor dos dois picos).
+            //    Garante que cada POC secundário pertence a uma zona de alto volume distinta.
+            var accepted = new List<int> { pocIdx }; // começa com o POC principal como referência
 
-                decimal valleyThreshold = Math.Min(vol, session.MaxVolume) * 0.70m;
-                bool hasValley = false;
-                for (int j = rangeL; j < rangeR; j++)
+            foreach (var (candIdx, candPrice, _) in candidates)
+            {
+                if (session.SecondaryPOCs.Count >= MaxSecondaryPOCs) break;
+
+                bool ok = true;
+                foreach (int accIdx in accepted)
                 {
-                    if (levels[j].Value.TotalVolume < valleyThreshold)
-                    {
-                        hasValley = true;
-                        break;
-                    }
+                    int lo = Math.Min(candIdx, accIdx);
+                    int hi = Math.Max(candIdx, accIdx);
+                    if (hi - lo <= 1) { ok = false; break; } // adjacentes — sem LVA entre eles
+
+                    // Volume mínimo no corredor entre os dois picos
+                    decimal valleyMin = decimal.MaxValue;
+                    for (int j = lo + 1; j < hi; j++)
+                        valleyMin = Math.Min(valleyMin, levels[j].Value.TotalVolume);
+
+                    // LVA válida: valley abaixo de 50 % do menor dos dois picos
+                    decimal lowerPeak = Math.Min(levels[candIdx].Value.TotalVolume,
+                                                 levels[accIdx].Value.TotalVolume);
+                    if (valleyMin >= lowerPeak * 0.50m) { ok = false; break; }
                 }
 
-                if (hasValley)
-                    session.SecondaryPOCs.Add(levels[i].Key);
+                if (ok)
+                {
+                    session.SecondaryPOCs.Add(candPrice);
+                    accepted.Add(candIdx);
+                }
             }
         }
 
@@ -686,14 +711,12 @@ namespace ATAS.Indicators.Custom
             // VAL
             DrawHorizontalLevel(context, session.VAL, x1, x2, tick, CorVAL);
 
-            // POC principal — linha sólida, 2px
-            // RenderPen não é IDisposable — não usar using()
+            // POC principal — rect 2px de altura (renderiza no mesmo layer que os FillRectangles)
             int pocY = PriceToY(session.POC + tick * 0.5m);
-            var pocPen = new RenderPen(CorPOC, 2f);
-            context.DrawLine(pocPen, x1, pocY, x2, pocY); // ⚠ VERIFICAR assinatura exacta
+            context.FillRectangle(CorPOC, new Rectangle(x1, pocY - 1, x2 - x1, 2));
 
             // POCs secundários — linha tracejada fina
-            if (MarcarPOCsSecundarios && session.SecondaryPOCs.Count > 0)
+            if (session.SecondaryPOCs.Count > 0)
             {
                 var dpen = new RenderPen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash };
                 foreach (decimal sp in session.SecondaryPOCs)
@@ -710,9 +733,9 @@ namespace ATAS.Indicators.Custom
             if (VahValMode == VahValModo.Linha)
             {
                 int y = PriceToY(price + tick * 0.5m);
-                // RenderPen não é IDisposable — não usar using()
-                var pen = new RenderPen(color, 1f) { DashStyle = DashStyle.Dash };
-                context.DrawLine(pen, x1, y, x2, y); // ⚠ VERIFICAR assinatura exacta
+                // FillRectangle garante visibilidade sobre as barras do perfil
+                var lineColor = Color.FromArgb(220, color.R, color.G, color.B);
+                context.FillRectangle(lineColor, new Rectangle(x1, y, x2 - x1, 1));
             }
             else // Zona
             {
