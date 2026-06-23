@@ -660,10 +660,10 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // Renderizar apenas no layer correcto para evitar duplo desenho.
-            bool wantFinal = (ProfileLayer == ProfileLayer.PorCima);
-            if (wantFinal && layout != DrawingLayouts.Final)      return;
-            if (!wantFinal && layout != DrawingLayouts.BelowCandles) return;
+            // PorCima  → desenha apenas no layer Final (por cima das candles).
+            // PorTras  → desenha em qualquer layer que não seja Final (fica atrás das candles).
+            if (ProfileLayer == ProfileLayer.PorCima  && layout != DrawingLayouts.Final) return;
+            if (ProfileLayer == ProfileLayer.PorTras  && layout == DrawingLayouts.Final) return;
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
