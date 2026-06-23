@@ -548,21 +548,18 @@ namespace ATAS.Indicators.Custom
 
         protected override void OnRender(RenderContext context, DrawingLayouts layout)
         {
-            // ⚠ VERIFICAR — DrawingLayouts.Final: confirmar que este valor existe em SDK 10.
-            // Alternativas comuns: DrawingLayouts.LatestBar, DrawingLayouts.Historical.
-            // Se o indicador não aparecer, experimenta remover a guarda abaixo
-            // e deixar desenhar em todos os layouts.
-            if (layout != DrawingLayouts.Final) return;
-
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
-            if (_currentSession != null
-                && _currentSession.MetricsValid
-                && _currentSession.PriceLevels.Count > 0)
+            if (_currentSession != null && _currentSession.PriceLevels.Count > 0)
+            {
+                // Forçar cálculo de métricas se ainda não foi feito
+                if (!_currentSession.MetricsValid)
+                    ComputeMetrics(_currentSession);
                 toRender.Add(_currentSession);
+            }
 
             foreach (var s in toRender)
             {
@@ -591,12 +588,10 @@ namespace ATAS.Indicators.Custom
             // ⚠ VERIFICAR — ChartInfo.PriceChartContainer.Region: confirmar tipo (Rectangle/Rect).
             var region = ChartInfo.PriceChartContainer.Region; // ⚠ VERIFICAR
 
-            // Sessão completamente fora do viewport — saltar
-            if (x2 < region.Left || x1 > region.Right) return;
-
-            // Cortar ao viewport
+            // Cortar ao viewport e verificar se sobra área visível
             x1 = Math.Max(x1, region.Left);
             x2 = Math.Min(x2, region.Right);
+            if (x1 >= x2) return;
 
             int totalWidth  = Math.Max(2, x2 - x1);
             int profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
