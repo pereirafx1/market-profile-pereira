@@ -157,18 +157,23 @@ namespace ATAS.Indicators.Custom
                  GroupName = "POC", Order = 30)]
         public Color CorPOC { get; set; } = Color.FromArgb(255, 255, 165, 0);
 
+        [Display(Name = "Mostrar POCs secundários",
+                 Description = "Activar/desactivar a marcação de POCs secundários.",
+                 GroupName = "POC", Order = 31)]
+        public bool MostrarPOCsSecundarios { get; set; } = true;
+
         [Display(Name = "POCs secundários (máximo)",
                  Description = "Quantos POCs secundários mostrar. 0 = desactivado.",
-                 GroupName = "POC", Order = 31)]
+                 GroupName = "POC", Order = 32)]
         public int MaxSecondaryPOCs { get; set; } = 3;
 
         [Display(Name = "POC secundário — volume mínimo (%)",
                  Description = "Um pico só é candidato a POC secundário se tiver pelo menos X% do volume do POC principal.",
-                 GroupName = "POC", Order = 32)]
+                 GroupName = "POC", Order = 33)]
         public int SecondaryPOCThresholdPct { get; set; } = 60;
 
         [Display(Name = "POC secundário — cor",
-                 GroupName = "POC", Order = 33)]
+                 GroupName = "POC", Order = 34)]
         public Color CorPOCSecundario { get; set; } = Color.FromArgb(255, 180, 80, 255);
 
         // --- Colors — Volume ---
@@ -486,7 +491,7 @@ namespace ATAS.Indicators.Custom
         private void FindSecondaryPOCs(ProfileSession session)
         {
             session.SecondaryPOCs.Clear();
-            if (MaxSecondaryPOCs <= 0) return;
+            if (!MostrarPOCsSecundarios || MaxSecondaryPOCs <= 0) return;
 
             var levels = session.PriceLevels.ToList(); // ascendente por preço
             int n = levels.Count;
@@ -602,12 +607,25 @@ namespace ATAS.Indicators.Custom
             int totalWidth  = Math.Max(2, x2 - x1);
             int profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
 
+            // x-range para linhas de nível (POC, VAH, VAL):
+            //   Volume       → cobre a largura das barras (x1 … x1+profileMaxW)
+            //   Volume+Delta → apenas lado direito / volume (centerX … x2)
+            int levelX1, levelX2;
             if (ProfileType == ProfileType.Volume)
+            {
                 DrawVolumeProfile(context, session, x1, profileMaxW, tick);
+                levelX1 = x1;
+                levelX2 = x1 + profileMaxW;
+            }
             else
+            {
+                int centerX = x1 + totalWidth / 2;
                 DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick);
+                levelX1 = centerX;
+                levelX2 = x2;
+            }
 
-            DrawKeyLevels(context, session, x1, x2, tick);
+            DrawKeyLevels(context, session, levelX1, levelX2, tick);
         }
 
         // ---------------------------------------------------------------------
