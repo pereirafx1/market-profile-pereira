@@ -692,21 +692,19 @@ namespace ATAS.Indicators.Custom
             DrawHorizontalLevel(context, session.VAL, x1, x2, tick, CorVAL);
 
             // POC principal — linha sólida, 2px
+            // RenderPen não é IDisposable — não usar using()
             int pocY = PriceToY(session.POC + tick * 0.5m);
-            using (var pen = new RenderPen(CorPOC, 2f))
-                context.DrawLine(pen, x1, pocY, x2, pocY); // ⚠ VERIFICAR assinatura exacta
+            var pocPen = new RenderPen(CorPOC, 2f);
+            context.DrawLine(pocPen, x1, pocY, x2, pocY); // ⚠ VERIFICAR assinatura exacta
 
             // POCs secundários — linha tracejada fina
             if (MarcarPOCsSecundarios && session.SecondaryPOCs.Count > 0)
             {
-                // ⚠ VERIFICAR se RenderPen tem DashStyle; se não, implementar traço manual
-                using (var dpen = new RenderPen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash })
+                var dpen = new RenderPen(CorPOCSecundario, 1f) { DashStyle = DashStyle.Dash };
+                foreach (decimal sp in session.SecondaryPOCs)
                 {
-                    foreach (decimal sp in session.SecondaryPOCs)
-                    {
-                        int sy = PriceToY(sp + tick * 0.5m);
-                        context.DrawLine(dpen, x1, sy, x2, sy); // ⚠ VERIFICAR assinatura exacta
-                    }
+                    int sy = PriceToY(sp + tick * 0.5m);
+                    context.DrawLine(dpen, x1, sy, x2, sy); // ⚠ VERIFICAR assinatura exacta
                 }
             }
         }
@@ -717,9 +715,9 @@ namespace ATAS.Indicators.Custom
             if (VahValMode == VahValModo.Linha)
             {
                 int y = PriceToY(price + tick * 0.5m);
-                // ⚠ VERIFICAR se RenderPen tem DashStyle; se não, implementar traço manual
-                using (var pen = new RenderPen(color, 1f) { DashStyle = DashStyle.Dash })
-                    context.DrawLine(pen, x1, y, x2, y); // ⚠ VERIFICAR assinatura exacta
+                // RenderPen não é IDisposable — não usar using()
+                var pen = new RenderPen(color, 1f) { DashStyle = DashStyle.Dash };
+                context.DrawLine(pen, x1, y, x2, y); // ⚠ VERIFICAR assinatura exacta
             }
             else // Zona
             {
