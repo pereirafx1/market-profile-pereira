@@ -278,11 +278,9 @@ namespace ATAS.Indicators.Custom
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
 
-        // Watchdog para PorCima: System.Threading.Timer dispara mesmo quando o ATAS suprime OnRender.
-        // Quando DrawAbovePrice=true e OnRender não é chamado há >150ms, a barra atual saiu
-        // do ecrã → repõe DrawAbovePrice=false para o ATAS voltar a chamar OnRender.
+        // Timer que verifica a cada 100ms se a barra atual está visível.
+        // Usa DoActionInGuiThread + LastVisibleBarNumber + RefreshData() — APIs do SDK ATAS.
         private System.Threading.Timer _watchdog;
-        private long                   _lastRenderTick;
 
         // =====================================================================
         //  Construtor
@@ -302,9 +300,7 @@ namespace ATAS.Indicators.Custom
         {
             _sessions.Clear();
             _currentSession = null;
-            _lastRenderTick = System.Diagnostics.Stopwatch.GetTimestamp();
 
-            // Criar/reiniciar watchdog; só corre quando ProfileLayer == PorCima
             _watchdog?.Dispose();
             _watchdog = new System.Threading.Timer(WatchdogTick, null,
                 System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
@@ -313,17 +309,32 @@ namespace ATAS.Indicators.Custom
 
         private void SetWatchdog(bool enable)
         {
-            int delay = enable ? 150 : System.Threading.Timeout.Infinite;
-            try { _watchdog?.Change(delay, 150); } catch { }
+            int period = enable ? 100 : System.Threading.Timeout.Infinite;
+            try { _watchdog?.Change(period, period); } catch { }
         }
 
         private void WatchdogTick(object state)
         {
-            if (!DrawAbovePrice || ProfileLayer != ProfileLayer.PorCima) return;
-            double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - _lastRenderTick)
-                        * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-            if (ms > 150)
-                DrawAbovePrice = false; // barra atual fora do ecrã → ATAS volta a chamar OnRender
+            // Executar no thread da UI para aceder a LastVisibleBarNumber com segurança
+            DoActionInGuiThread(() =>
+            {
+                if (ProfileLayer != ProfileLayer.PorCima) return;
+
+                // CurrentBar é a barra mais recente; se LastVisibleBarNumber < CurrentBar-1
+                // significa que a barra atual está fora do ecrã (utilizador está em histórico)
+                bool curBarOff = LastVisibleBarNumber < CurrentBar - 1;
+
+                if (DrawAbovePrice && curBarOff)
+                {
+                    DrawAbovePrice = false;
+                    RefreshData(); // força o ATAS a chamar OnRender com DrawAbovePrice=false
+                }
+                else if (!DrawAbovePrice && !curBarOff)
+                {
+                    DrawAbovePrice = true;
+                    RefreshData(); // volta ao modo acima-das-candles
+                }
+            });
         }
 
         ~MarketProfilePereira()
@@ -702,32 +713,8 @@ namespace ATAS.Indicators.Custom
 
         protected override void OnRender(RenderContext context, DrawingLayouts layout)
         {
-            _lastRenderTick = System.Diagnostics.Stopwatch.GetTimestamp();
-
             if (PositionMode == PositionMode.Manual) return;
-
-            // Comutação dinâmica de DrawAbovePrice para PorCima:
-            //   • DrawAbovePrice=true → acima das candles, mas ATAS para de chamar OnRender
-            //                           quando a barra atual sai do ecrã
-            //   • DrawAbovePrice=false → OnRender sempre chamado, profiles visíveis no histórico
-            //
-            // Quando OnRender é chamado (durante scroll ou evento de zoom), verificamos a
-            // visibilidade da barra atual e comutamos em conformidade.
-            // O watchdog em OnCalculate complementa este mecanismo para o caso de ATAS não
-            // chamar OnRender durante a transição.
-            if (ProfileLayer == ProfileLayer.PorCima)
-            {
-                int curX = CurrentBar >= 0 ? GetBarX(CurrentBar) : 0;
-                if (DrawAbovePrice && curX == 0)
-                {
-                    DrawAbovePrice = false;  // barra saiu do ecrã → manter OnRender ativo
-                }
-                else if (!DrawAbovePrice && curX != 0)
-                {
-                    DrawAbovePrice = true;   // barra voltou ao ecrã → acima das candles
-                    return;                  // este frame ainda era DrawAbovePrice=false; ATAS re-chama acima
-                }
-            }
+            // DrawAbovePrice é gerido pelo WatchdogTick via DoActionInGuiThread + RefreshData.
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
