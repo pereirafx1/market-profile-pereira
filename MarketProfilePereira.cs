@@ -282,7 +282,7 @@ namespace ATAS.Indicators.Custom
         // Quando DrawAbovePrice=true e OnRender não é chamado há >150ms, a barra atual saiu
         // do ecrã → repõe DrawAbovePrice=false para o ATAS voltar a chamar OnRender.
         private System.Threading.Timer _watchdog;
-        private volatile long          _lastRenderTick;
+        private long                   _lastRenderTick;
 
         // =====================================================================
         //  Construtor
