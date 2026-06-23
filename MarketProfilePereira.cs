@@ -675,15 +675,14 @@ namespace ATAS.Indicators.Custom
             // Modo Manual reservado para Fase 2 — não desenha nada por agora
             if (PositionMode == PositionMode.Manual) return;
 
-            // DrawAbovePrice está sempre false para garantir que OnRender é chamado mesmo
-            // em modo histórico (ATAS para de chamar OnRender quando DrawAbovePrice=true
-            // e a barra atual sai do ecrã).
+            // DrawAbovePrice está sempre false: garante que OnRender é sempre chamado,
+            // mesmo quando a barra atual sai do ecrã (DrawAbovePrice=true impede isso).
             //
-            // Z-order manual via layout:
-            //   PorTras  → não desenha no passe Final (fica atrás das candles)
-            //   PorCima  → desenha APENAS no passe Final (o último passe = acima de tudo)
-            if (ProfileLayer == ProfileLayer.PorTras  && layout == DrawingLayouts.Final) return;
-            if (ProfileLayer == ProfileLayer.PorCima  && layout != DrawingLayouts.Final) return;
+            // Z-order via layout:
+            //   PorTras → salta o passe Final para ficar atrás das candles
+            //   PorCima → sem filtro; com DrawAbovePrice=false o ATAS não chama Final,
+            //             por isso desenhar em qualquer passe garante visibilidade
+            if (ProfileLayer == ProfileLayer.PorTras && layout == DrawingLayouts.Final) return;
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
