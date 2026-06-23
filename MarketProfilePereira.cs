@@ -700,18 +700,26 @@ namespace ATAS.Indicators.Custom
             decimal tick = InstrumentInfo.TickSize;
             if (tick <= 0) tick = 0.01m;
 
-            // ⚠ VERIFICAR — ChartInfo.GetXCoordinate(barIndex): confirmar nome exacto.
-            // Em algumas versões é ChartInfo.GetXCoordinate(bar)
-            // ou ChartInfo.PriceChartContainer.GetXCoordinate(bar).
-            int x1 = GetBarX(session.StartBar); // ⚠ VERIFICAR (ver helper abaixo)
-            int x2 = GetBarX(session.EndBar);   // ⚠ VERIFICAR
+            var region = ChartInfo.PriceChartContainer.Region;
+
+            // Quando a sessão começa ou termina fora do viewport, GetXByBar devolve 0
+            // (valor inválido). Usamos o índice da primeira barra visível para detectar
+            // quais extremos estão fora do ecrã e usar as bordas do viewport nesses casos.
+            int firstVisible = ChartInfo.FirstVisibleBarNumber;
+            int lastVisible  = CurrentBar - 1;
+
+            // Sessão completamente fora do viewport — não desenha
+            if (session.EndBar < firstVisible || session.StartBar > lastVisible) return;
+
+            int x1 = session.StartBar >= firstVisible
+                ? GetBarX(session.StartBar)
+                : region.Left;
+            int x2 = session.EndBar <= lastVisible
+                ? GetBarX(session.EndBar)
+                : region.Right;
 
             if (x2 < x1) { int tmp = x1; x1 = x2; x2 = tmp; }
 
-            // ⚠ VERIFICAR — ChartInfo.PriceChartContainer.Region: confirmar tipo (Rectangle/Rect).
-            var region = ChartInfo.PriceChartContainer.Region; // ⚠ VERIFICAR
-
-            // Cortar ao viewport e verificar se sobra área visível
             x1 = Math.Max(x1, region.Left);
             x2 = Math.Min(x2, region.Right);
             if (x1 >= x2) return;
