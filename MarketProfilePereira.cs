@@ -59,8 +59,6 @@ namespace ATAS.Indicators.Custom
 
     public enum TpoShape { PorPeriodo, Histograma }
 
-    public enum TpoDrawingMode { Blocos, BlocosELetras }
-
     public enum ProfilePosition { SobreCandles, AncoraDireita }
 
     // =========================================================================
@@ -334,14 +332,9 @@ namespace ATAS.Indicators.Custom
                  GroupName = "TPO", Order = 62)]
         public TpoShape TpoShape { get; set; } = TpoShape.PorPeriodo;
 
-        [Display(Name = "Modo de desenho",
-                 Description = "Blocos = apenas blocos coloridos. BlocosELetras = mostra a letra do sub-período dentro de cada bloco (igual ao ATAS nativo).",
-                 GroupName = "TPO", Order = 63)]
-        public TpoDrawingMode TpoDrawingMode { get; set; } = TpoDrawingMode.Blocos;
-
         [Display(Name = "Mostrar single prints",
                  Description = "Destaca os níveis de preço tocados por apenas 1 sub-período.",
-                 GroupName = "TPO", Order = 64)]
+                 GroupName = "TPO", Order = 63)]
         public bool MostrarSinglePrints { get; set; } = false;
 
         // --- Colors — TPO ---
@@ -358,9 +351,22 @@ namespace ATAS.Indicators.Custom
                  GroupName = "Colors — TPO", Order = 72)]
         public Color CorSinglePrint { get; set; } = Color.FromArgb(220, 255, 220, 80);
 
-        [Display(Name = "Cor do texto nos blocos  (modo BlocosELetras)",
-                 GroupName = "Colors — TPO", Order = 73)]
-        public Color CorTextoBlocos { get; set; } = Color.FromArgb(255, 0, 0, 0);
+        // --- Profile Extra ---
+
+        [Display(Name = "Mostrar profile extra",
+                 Description = "Apresenta um segundo profile (de tipo diferente) imediatamente à direita do profile principal.",
+                 GroupName = "Profile Extra", Order = 80)]
+        public bool MostrarProfileExtra { get; set; } = false;
+
+        [Display(Name = "Tipo do profile extra",
+                 Description = "Escolhe o tipo de profile a mostrar em paralelo com o principal.",
+                 GroupName = "Profile Extra", Order = 81)]
+        public ProfileType TipoProfileExtra { get; set; } = ProfileType.TPO;
+
+        [Display(Name = "Largura máxima extra (% do viewport)",
+                 Description = "Largura máxima do profile extra, como percentagem da largura total visível.",
+                 GroupName = "Profile Extra", Order = 82)]
+        public int MaxWidthPercentExtra { get; set; } = 30;
 
         // =====================================================================
         //  Estado interno
@@ -1062,6 +1068,43 @@ namespace ATAS.Indicators.Custom
                 DrawKeyLevels(context, session, levelX1, levelX2, tick);
             }
             DrawTotalDeltaLabel(context, session, x1, x2);
+
+            // Extra profile — drawn immediately to the right of the main profile
+            if (MostrarProfileExtra)
+            {
+                int extraX1   = x1 + profileMaxW + 3;
+                int extraMaxW = Math.Max(2, MaxWidthPercentExtra * (viewRight - viewLeft) / 100);
+                if (extraX1 < viewRight)
+                    DrawExtraProfile(context, session, extraX1, extraMaxW, tick);
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        //  Profile extra — segundo profile desenhado à direita do principal
+        // ---------------------------------------------------------------------
+
+        private void DrawExtraProfile(RenderContext context, ProfileSession session,
+                                      int x1, int maxW, decimal tick)
+        {
+            int x2 = x1 + maxW;
+            switch (TipoProfileExtra)
+            {
+                case ProfileType.Volume:
+                    DrawVolumeProfile(context, session, x1, maxW, tick);
+                    DrawKeyLevels(context, session, x1, x2, tick);
+                    break;
+                case ProfileType.VolumeDelta:
+                {
+                    int centerX = x1 + maxW / 2;
+                    DrawVolumeDeltaProfile(context, session, x1, x2, maxW, tick);
+                    DrawKeyLevels(context, session, centerX, x2, tick);
+                    break;
+                }
+                case ProfileType.TPO:
+                    DrawTPOProfile(context, session, x1, maxW, tick);
+                    DrawKeyLevelsTpo(context, session, x1, x2, tick);
+                    break;
+            }
         }
 
         // ---------------------------------------------------------------------
@@ -1114,22 +1157,10 @@ namespace ATAS.Indicators.Custom
                         ? palette[i % palette.Length]
                         : (inVA ? CorTPO : CorTPOForaVA);
 
-                    int blockX = x1 + i * cellW;
+                    int blockX   = x1 + i * cellW;
                     int cellDraw = Math.Max(1, cellW - 1);
                     context.FillRectangle(ApplyOpacity(col),
                         new Rectangle(blockX, yTop, cellDraw, barH));
-
-                    // Draw letter only when "BlocosELetras" mode is active and cell is readable
-                    if (TpoDrawingMode == TpoDrawingMode.BlocosELetras && cellW >= 6)
-                    {
-                        string letter = GetTpoLetter(i);
-                        // Font sized by cell WIDTH (not height) so thin rows still show letters
-                        float fs    = Math.Max(6f, Math.Min(14f, (float)(cellW - 1)));
-                        var   lFont = new RenderFont("Arial", fs);
-                        // Give the rect enough height for the glyph even if barH is tiny
-                        context.DrawString(letter, lFont, CorTextoBlocos,
-                            new Rectangle(blockX, yTop, cellW, Math.Max(barH, (int)fs + 2)));
-                    }
                 }
 
                 // Single-print marker: thin stripe to the right of all blocks
@@ -1197,14 +1228,6 @@ namespace ATAS.Indicators.Custom
             double minutes = (barTime - sessionStart).TotalMinutes;
             return (int)Math.Max(0, Math.Floor(minutes / _tpoSubPeriodMinutes));
         }
-
-        // Maps sub-period index to standard TPO letter: 0=A … 25=Z, 26=a … 51=z, then wraps.
-        private static string GetTpoLetter(int index)
-        {
-            const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-            return letters[index % letters.Length].ToString();
-        }
-
 
         private static Color[] BuildTpoPalette(int count)
         {
