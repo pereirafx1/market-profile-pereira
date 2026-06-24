@@ -57,6 +57,8 @@ namespace ATAS.Indicators.Custom
 
     public enum TpoColorMode { PorLetra, PorValueArea }
 
+    public enum TpoShape { PorPeriodo, Histograma }
+
     public enum ProfilePosition { SobreCandles, AncoraDireita }
 
     // =========================================================================
@@ -325,9 +327,14 @@ namespace ATAS.Indicators.Custom
                  GroupName = "TPO", Order = 61)]
         public TpoColorMode TpoColorMode { get; set; } = TpoColorMode.PorLetra;
 
+        [Display(Name = "Shape",
+                 Description = "PorPeriodo = uma coluna por sub-período (estilo grade). Histograma = uma barra por nível de preço com largura proporcional ao nº de períodos (estilo Market Profile clássico).",
+                 GroupName = "TPO", Order = 62)]
+        public TpoShape TpoShape { get; set; } = TpoShape.PorPeriodo;
+
         [Display(Name = "Mostrar single prints",
                  Description = "Destaca os níveis de preço tocados por apenas 1 sub-período.",
-                 GroupName = "TPO", Order = 62)]
+                 GroupName = "TPO", Order = 63)]
         public bool MostrarSinglePrints { get; set; } = false;
 
         // --- Colors — TPO ---
@@ -1053,6 +1060,12 @@ namespace ATAS.Indicators.Custom
         private void DrawTPOProfile(RenderContext context, ProfileSession session,
                                     int x1, int maxW, decimal tick)
         {
+            if (TpoShape == TpoShape.Histograma)
+            {
+                DrawTPOHistogram(context, session, x1, maxW, tick);
+                return;
+            }
+
             if (session.TpoPeriodsByIndex.Count == 0) return;
 
             var orderedPeriods = session.TpoPeriodsByIndex.Values.ToList(); // sorted by key
@@ -1100,6 +1113,53 @@ namespace ATAS.Indicators.Custom
                 {
                     context.FillRectangle(ApplyOpacity(CorSinglePrint),
                         new Rectangle(x1 + numPeriods * cellW + 1, yTop, 3, barH));
+                }
+            }
+        }
+
+        // Classic Market Profile histogram: one horizontal bar per price level,
+        // width proportional to TPO count, color by price position (red=top, blue=bottom).
+        private void DrawTPOHistogram(RenderContext context, ProfileSession session,
+                                      int x1, int maxW, decimal tick)
+        {
+            var pc = session.TpoPriceCount;
+            if (pc == null || pc.Count == 0 || session.MaxTpoCount <= 0) return;
+
+            decimal minPrice   = pc.Keys.Min();
+            decimal maxPrice   = pc.Keys.Max();
+            decimal priceRange = maxPrice - minPrice;
+            bool    perValueArea = TpoColorMode == TpoColorMode.PorValueArea;
+
+            foreach (var kvp in pc)
+            {
+                decimal price = kvp.Key;
+                int     count = kvp.Value;
+                if (count <= 0) continue;
+
+                int barW = Math.Max(1, (int)((double)count / session.MaxTpoCount * maxW));
+                GetLevelRect(price, tick, out int yTop, out int barH);
+
+                Color col;
+                if (perValueArea)
+                {
+                    bool inVA = price >= session.TpoVAL && price <= session.TpoVAH;
+                    col = ApplyOpacity(inVA ? CorTPO : CorTPOForaVA);
+                }
+                else
+                {
+                    // Price-position rainbow: high price → hue 0 (red), low price → hue 240 (blue)
+                    float t   = priceRange > 0 ? (float)((price - minPrice) / priceRange) : 0.5f;
+                    float hue = (1f - t) * 240f;
+                    col = ApplyOpacity(HsvToColor(hue, 0.85f, 0.90f));
+                }
+
+                context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
+
+                // Single-print marker: thin stripe just to the right of the bar
+                if (MostrarSinglePrints && count == 1)
+                {
+                    context.FillRectangle(ApplyOpacity(CorSinglePrint),
+                        new Rectangle(x1 + barW + 1, yTop, 3, barH));
                 }
             }
         }
