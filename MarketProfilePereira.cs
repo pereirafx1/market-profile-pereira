@@ -1109,13 +1109,13 @@ namespace ATAS.Indicators.Custom
                         new Rectangle(blockX, yTop, cellDraw, barH));
 
                     // Draw letter when cells are large enough to be readable
-                    if (cellW >= 8 && barH >= 7)
+                    if (cellW >= 7 && barH >= 5)
                     {
                         string letter = GetTpoLetter(i);
-                        float  fs     = Math.Max(5f, Math.Min(cellW - 2f, barH - 1f));
+                        float  fs     = Math.Max(5f, Math.Min(12f, Math.Min((float)(cellW - 1), (float)barH)));
                         var    lFont  = new RenderFont("Arial", fs);
-                        context.DrawString(letter, lFont, Color.FromArgb(190, 0, 0, 0),
-                            new Rectangle(blockX + 1, yTop, cellDraw - 1, barH));
+                        context.DrawString(letter, lFont, Color.FromArgb(200, 0, 0, 0),
+                            new Rectangle(blockX, yTop, cellW, Math.Max(barH, (int)fs + 1)));
                     }
                 }
 
