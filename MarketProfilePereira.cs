@@ -381,8 +381,8 @@ namespace ATAS.Indicators.Custom
                  GroupName = "Profile Extra", Order = 81)]
         public ProfileType TipoProfileExtra { get; set; } = ProfileType.TPO;
 
-        [Display(Name = "Largura máxima extra (% do viewport)",
-                 Description = "Largura máxima do profile extra, como percentagem da largura total visível.",
+        [Display(Name = "Largura do extra (% do profile total)",
+                 Description = "Percentagem da largura total do profile (MaxWidthPercent) que vai para o profile extra; o principal ocupa o restante. Ambos ficam dentro do range da sessão.",
                  GroupName = "Profile Extra", Order = 82)]
         public int MaxWidthPercentExtra { get; set; } = 30;
 
@@ -1097,9 +1097,19 @@ namespace ATAS.Indicators.Custom
                 profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
             }
 
-            // x-range para linhas de nível (POC, VAH, VAL):
-            //   Volume / TPO → cobre a largura das barras (x1 … x1+profileMaxW)
-            //   Volume+Delta → apenas lado direito / volume (centerX … x2)
+            // Split profileMaxW between main and extra so both stay within the session range.
+            // MaxWidthPercentExtra = % of profileMaxW allocated to the extra profile.
+            int mainW  = profileMaxW;
+            int extraW = 0;
+            int extraX1Start = 0;
+            if (MostrarProfileExtra)
+            {
+                int extraPct = Math.Max(5, Math.Min(90, MaxWidthPercentExtra));
+                extraW        = Math.Max(2, profileMaxW * extraPct / 100);
+                mainW         = Math.Max(2, profileMaxW - extraW - 2);
+                extraX1Start  = x1 + mainW + 2;
+            }
+
             var mainVolCfg = new VolumeDrawConfig
             {
                 CorInVA  = CorVolumePerfil,
@@ -1120,36 +1130,33 @@ namespace ATAS.Indicators.Custom
             int levelX1, levelX2;
             if (ProfileType == ProfileType.Volume)
             {
-                DrawVolumeProfile(context, session, x1, profileMaxW, tick, mainVolCfg);
+                DrawVolumeProfile(context, session, x1, mainW, tick, mainVolCfg);
                 levelX1 = x1;
-                levelX2 = x1 + profileMaxW;
+                levelX2 = x1 + mainW;
                 DrawKeyLevels(context, session, levelX1, levelX2, tick);
             }
             else if (ProfileType == ProfileType.TPO)
             {
-                DrawTPOProfile(context, session, x1, profileMaxW, tick, mainTpoCfg);
+                DrawTPOProfile(context, session, x1, mainW, tick, mainTpoCfg);
                 levelX1 = x1;
-                levelX2 = x1 + profileMaxW;
+                levelX2 = x1 + mainW;
                 DrawKeyLevelsTpo(context, session, levelX1, levelX2, tick);
             }
             else
             {
-                int centerX = x1 + (x2 - x1) / 2;
-                DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick, mainVolCfg);
+                // VolumeDelta: use mainW for the half-widths; centre on x1 + mainW/2
+                int mainX2  = x1 + mainW;
+                int centerX = x1 + mainW / 2;
+                DrawVolumeDeltaProfile(context, session, x1, mainX2, mainW, tick, mainVolCfg);
                 levelX1 = centerX;
-                levelX2 = x2;
+                levelX2 = mainX2;
                 DrawKeyLevels(context, session, levelX1, levelX2, tick);
             }
-            DrawTotalDeltaLabel(context, session, x1, x2);
+            DrawTotalDeltaLabel(context, session, x1, x1 + mainW);
 
-            // Extra profile — drawn immediately to the right of the main profile
-            if (MostrarProfileExtra)
-            {
-                int extraX1   = x1 + profileMaxW + 3;
-                int extraMaxW = Math.Max(2, MaxWidthPercentExtra * (viewRight - viewLeft) / 100);
-                if (extraX1 < viewRight)
-                    DrawExtraProfile(context, session, extraX1, extraMaxW, tick);
-            }
+            // Extra profile — drawn to the right of the main, still within session bounds
+            if (MostrarProfileExtra && extraW > 0)
+                DrawExtraProfile(context, session, extraX1Start, extraW, tick);
         }
 
         // ---------------------------------------------------------------------
