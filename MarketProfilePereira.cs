@@ -92,6 +92,24 @@ namespace ATAS.Indicators.Custom
                 => Prices.Contains(p) || (LivePrices != null && LivePrices.Contains(p));
         }
 
+        private struct TpoDrawConfig
+        {
+            public TpoShape     Shape;
+            public TpoColorMode ColorMode;
+            public Color        CorInVA;
+            public Color        CorOutVA;
+            public bool         ShowSinglePrints;
+            public Color        CorSinglePrint;
+        }
+
+        private struct VolumeDrawConfig
+        {
+            public Color CorInVA;
+            public Color CorOutVA;
+            public Color CorBid;
+            public Color CorAsk;
+        }
+
         private sealed class ProfileSession
         {
             public DateTime StartTime;
@@ -367,6 +385,44 @@ namespace ATAS.Indicators.Custom
                  Description = "Largura máxima do profile extra, como percentagem da largura total visível.",
                  GroupName = "Profile Extra", Order = 82)]
         public int MaxWidthPercentExtra { get; set; } = 30;
+
+        // --- TPO-specific extra options (activos quando TipoProfileExtra = TPO) ---
+
+        [Display(Name = "TPO Extra — Shape",
+                 Description = "Shape do profile extra quando o tipo é TPO.",
+                 GroupName = "Profile Extra", Order = 83)]
+        public TpoShape TpoShapeExtra { get; set; } = TpoShape.Histograma;
+
+        [Display(Name = "TPO Extra — Modo de cor",
+                 GroupName = "Profile Extra", Order = 84)]
+        public TpoColorMode TpoColorModeExtra { get; set; } = TpoColorMode.PorLetra;
+
+        [Display(Name = "TPO Extra — Mostrar single prints",
+                 GroupName = "Profile Extra", Order = 85)]
+        public bool MostrarSinglePrintsExtra { get; set; } = false;
+
+        // --- Colors — Profile Extra ---
+
+        [Display(Name = "TPO Extra — dentro da VA  (modo PorValueArea)",
+                 GroupName = "Colors — Profile Extra", Order = 90)]
+        public Color CorTPOExtra { get; set; } = Color.FromArgb(200, 0, 150, 255);
+
+        [Display(Name = "TPO Extra — fora da VA  (modo PorValueArea)",
+                 GroupName = "Colors — Profile Extra", Order = 91)]
+        public Color CorTPOForaVAExtra { get; set; } = Color.FromArgb(200, 0, 80, 180);
+
+        [Display(Name = "TPO Extra — single prints",
+                 GroupName = "Colors — Profile Extra", Order = 92)]
+        public Color CorSinglePrintExtra { get; set; } = Color.FromArgb(220, 255, 220, 80);
+
+        [Display(Name = "Volume Extra — dentro da VA",
+                 Description = "Cor do profile extra quando o tipo é Volume ou VolumeDelta (dentro da VA).",
+                 GroupName = "Colors — Profile Extra", Order = 93)]
+        public Color CorVolumePerfilExtra { get; set; } = Color.FromArgb(200, 100, 180, 255);
+
+        [Display(Name = "Volume Extra — fora da VA",
+                 GroupName = "Colors — Profile Extra", Order = 94)]
+        public Color CorForaValueAreaExtra { get; set; } = Color.FromArgb(200, 60, 100, 200);
 
         // =====================================================================
         //  Estado interno
@@ -1044,17 +1100,34 @@ namespace ATAS.Indicators.Custom
             // x-range para linhas de nível (POC, VAH, VAL):
             //   Volume / TPO → cobre a largura das barras (x1 … x1+profileMaxW)
             //   Volume+Delta → apenas lado direito / volume (centerX … x2)
+            var mainVolCfg = new VolumeDrawConfig
+            {
+                CorInVA  = CorVolumePerfil,
+                CorOutVA = CorForaValueArea,
+                CorBid   = CorBid,
+                CorAsk   = CorAsk
+            };
+            var mainTpoCfg = new TpoDrawConfig
+            {
+                Shape            = TpoShape,
+                ColorMode        = TpoColorMode,
+                CorInVA          = CorTPO,
+                CorOutVA         = CorTPOForaVA,
+                ShowSinglePrints = MostrarSinglePrints,
+                CorSinglePrint   = CorSinglePrint
+            };
+
             int levelX1, levelX2;
             if (ProfileType == ProfileType.Volume)
             {
-                DrawVolumeProfile(context, session, x1, profileMaxW, tick);
+                DrawVolumeProfile(context, session, x1, profileMaxW, tick, mainVolCfg);
                 levelX1 = x1;
                 levelX2 = x1 + profileMaxW;
                 DrawKeyLevels(context, session, levelX1, levelX2, tick);
             }
             else if (ProfileType == ProfileType.TPO)
             {
-                DrawTPOProfile(context, session, x1, profileMaxW, tick);
+                DrawTPOProfile(context, session, x1, profileMaxW, tick, mainTpoCfg);
                 levelX1 = x1;
                 levelX2 = x1 + profileMaxW;
                 DrawKeyLevelsTpo(context, session, levelX1, levelX2, tick);
@@ -1062,7 +1135,7 @@ namespace ATAS.Indicators.Custom
             else
             {
                 int centerX = x1 + (x2 - x1) / 2;
-                DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick);
+                DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick, mainVolCfg);
                 levelX1 = centerX;
                 levelX2 = x2;
                 DrawKeyLevels(context, session, levelX1, levelX2, tick);
@@ -1086,22 +1159,39 @@ namespace ATAS.Indicators.Custom
         private void DrawExtraProfile(RenderContext context, ProfileSession session,
                                       int x1, int maxW, decimal tick)
         {
+            var extraVolCfg = new VolumeDrawConfig
+            {
+                CorInVA  = CorVolumePerfilExtra,
+                CorOutVA = CorForaValueAreaExtra,
+                CorBid   = CorBid,
+                CorAsk   = CorAsk
+            };
+            var extraTpoCfg = new TpoDrawConfig
+            {
+                Shape            = TpoShapeExtra,
+                ColorMode        = TpoColorModeExtra,
+                CorInVA          = CorTPOExtra,
+                CorOutVA         = CorTPOForaVAExtra,
+                ShowSinglePrints = MostrarSinglePrintsExtra,
+                CorSinglePrint   = CorSinglePrintExtra
+            };
+
             int x2 = x1 + maxW;
             switch (TipoProfileExtra)
             {
                 case ProfileType.Volume:
-                    DrawVolumeProfile(context, session, x1, maxW, tick);
+                    DrawVolumeProfile(context, session, x1, maxW, tick, extraVolCfg);
                     DrawKeyLevels(context, session, x1, x2, tick);
                     break;
                 case ProfileType.VolumeDelta:
                 {
                     int centerX = x1 + maxW / 2;
-                    DrawVolumeDeltaProfile(context, session, x1, x2, maxW, tick);
+                    DrawVolumeDeltaProfile(context, session, x1, x2, maxW, tick, extraVolCfg);
                     DrawKeyLevels(context, session, centerX, x2, tick);
                     break;
                 }
                 case ProfileType.TPO:
-                    DrawTPOProfile(context, session, x1, maxW, tick);
+                    DrawTPOProfile(context, session, x1, maxW, tick, extraTpoCfg);
                     DrawKeyLevelsTpo(context, session, x1, x2, tick);
                     break;
             }
@@ -1112,24 +1202,23 @@ namespace ATAS.Indicators.Custom
         // ---------------------------------------------------------------------
 
         private void DrawTPOProfile(RenderContext context, ProfileSession session,
-                                    int x1, int maxW, decimal tick)
+                                    int x1, int maxW, decimal tick, TpoDrawConfig cfg)
         {
-            if (TpoShape == TpoShape.Histograma)
+            if (cfg.Shape == TpoShape.Histograma)
             {
-                DrawTPOHistogram(context, session, x1, maxW, tick);
+                DrawTPOHistogram(context, session, x1, maxW, tick, cfg);
                 return;
             }
 
             if (session.TpoPeriodsByIndex.Count == 0) return;
 
-            var orderedPeriods = session.TpoPeriodsByIndex.Values.ToList(); // sorted by key
+            var orderedPeriods = session.TpoPeriodsByIndex.Values.ToList();
             int numPeriods     = orderedPeriods.Count;
             int cellW          = Math.Max(2, maxW / numPeriods);
 
-            bool    perLetter = TpoColorMode == TpoColorMode.PorLetra;
+            bool    perLetter = cfg.ColorMode == TpoColorMode.PorLetra;
             Color[] palette   = perLetter ? BuildTpoPalette(numPeriods) : null;
 
-            // Collect all prices touched by any period (union of Prices + LivePrices)
             var allPrices = new SortedSet<decimal>();
             foreach (var p in orderedPeriods)
             {
@@ -1140,13 +1229,12 @@ namespace ATAS.Indicators.Custom
             foreach (decimal price in allPrices)
             {
                 GetLevelRect(price, tick, out int yTop, out int barH);
-                bool inVA     = price >= session.TpoVAL && price <= session.TpoVAH;
-                int  periods  = 0;
-                bool single   = false;
-                if (session.TpoPriceCount != null)
+                bool inVA   = price >= session.TpoVAL && price <= session.TpoVAH;
+                bool single = false;
+                if (cfg.ShowSinglePrints && session.TpoPriceCount != null)
                 {
-                    session.TpoPriceCount.TryGetValue(price, out periods);
-                    single = MostrarSinglePrints && periods == 1;
+                    session.TpoPriceCount.TryGetValue(price, out int cnt);
+                    single = cnt == 1;
                 }
 
                 for (int i = 0; i < orderedPeriods.Count; i++)
@@ -1155,7 +1243,7 @@ namespace ATAS.Indicators.Custom
 
                     Color col = perLetter
                         ? palette[i % palette.Length]
-                        : (inVA ? CorTPO : CorTPOForaVA);
+                        : (inVA ? cfg.CorInVA : cfg.CorOutVA);
 
                     int blockX   = x1 + i * cellW;
                     int cellDraw = Math.Max(1, cellW - 1);
@@ -1163,19 +1251,17 @@ namespace ATAS.Indicators.Custom
                         new Rectangle(blockX, yTop, cellDraw, barH));
                 }
 
-                // Single-print marker: thin stripe to the right of all blocks
                 if (single)
                 {
-                    context.FillRectangle(ApplyOpacity(CorSinglePrint),
+                    context.FillRectangle(ApplyOpacity(cfg.CorSinglePrint),
                         new Rectangle(x1 + numPeriods * cellW + 1, yTop, 3, barH));
                 }
             }
         }
 
-        // Classic Market Profile histogram: one horizontal bar per price level,
-        // width proportional to TPO count, color by price position (red=top, blue=bottom).
+        // Classic Market Profile histogram: one bar per price, width ∝ TPO count.
         private void DrawTPOHistogram(RenderContext context, ProfileSession session,
-                                      int x1, int maxW, decimal tick)
+                                      int x1, int maxW, decimal tick, TpoDrawConfig cfg)
         {
             var pc = session.TpoPriceCount;
             if (pc == null || pc.Count == 0 || session.MaxTpoCount <= 0) return;
@@ -1183,7 +1269,7 @@ namespace ATAS.Indicators.Custom
             decimal minPrice   = pc.Keys.Min();
             decimal maxPrice   = pc.Keys.Max();
             decimal priceRange = maxPrice - minPrice;
-            bool    perValueArea = TpoColorMode == TpoColorMode.PorValueArea;
+            bool    perValueArea = cfg.ColorMode == TpoColorMode.PorValueArea;
 
             foreach (var kvp in pc)
             {
@@ -1198,11 +1284,10 @@ namespace ATAS.Indicators.Custom
                 if (perValueArea)
                 {
                     bool inVA = price >= session.TpoVAL && price <= session.TpoVAH;
-                    col = ApplyOpacity(inVA ? CorTPO : CorTPOForaVA);
+                    col = ApplyOpacity(inVA ? cfg.CorInVA : cfg.CorOutVA);
                 }
                 else
                 {
-                    // Price-position rainbow: high price → hue 0 (red), low price → hue 240 (blue)
                     float t   = priceRange > 0 ? (float)((price - minPrice) / priceRange) : 0.5f;
                     float hue = (1f - t) * 240f;
                     col = ApplyOpacity(HsvToColor(hue, 1.0f, 1.0f));
@@ -1210,10 +1295,9 @@ namespace ATAS.Indicators.Custom
 
                 context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
 
-                // Single-print marker: thin stripe just to the right of the bar
-                if (MostrarSinglePrints && count == 1)
+                if (cfg.ShowSinglePrints && count == 1)
                 {
-                    context.FillRectangle(ApplyOpacity(CorSinglePrint),
+                    context.FillRectangle(ApplyOpacity(cfg.CorSinglePrint),
                         new Rectangle(x1 + barW + 1, yTop, 3, barH));
                 }
             }
@@ -1268,7 +1352,7 @@ namespace ATAS.Indicators.Custom
         // ---------------------------------------------------------------------
 
         private void DrawVolumeProfile(RenderContext context, ProfileSession session,
-                                       int x1, int maxW, decimal tick)
+                                       int x1, int maxW, decimal tick, VolumeDrawConfig cfg)
         {
             if (session.MaxVolume <= 0) return;
 
@@ -1282,7 +1366,7 @@ namespace ATAS.Indicators.Custom
                 GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
 
                 bool  inVA = kvp.Key >= session.VAL && kvp.Key <= session.VAH;
-                Color col  = ApplyOpacity(inVA ? CorVolumePerfil : CorForaValueArea);
+                Color col  = ApplyOpacity(inVA ? cfg.CorInVA : cfg.CorOutVA);
 
                 context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
             }
@@ -1294,7 +1378,8 @@ namespace ATAS.Indicators.Custom
         // ---------------------------------------------------------------------
 
         private void DrawVolumeDeltaProfile(RenderContext context, ProfileSession session,
-                                            int x1, int x2, int maxW, decimal tick)
+                                            int x1, int x2, int maxW, decimal tick,
+                                            VolumeDrawConfig cfg)
         {
             if (session.MaxVolume <= 0) return;
 
@@ -1302,7 +1387,6 @@ namespace ATAS.Indicators.Custom
             int totalW  = x2 - x1;
             int centerX = x1 + totalW / 2;
 
-            // Escalar o lado delta pelo máximo de |delta| entre todos os níveis
             decimal maxAbsDelta = 1m;
             foreach (var lvl in session.PriceLevels.Values)
             {
@@ -1317,16 +1401,14 @@ namespace ATAS.Indicators.Custom
 
                 GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
 
-                // Lado direito: volume total
                 int volW = Math.Max(1, (int)(data.TotalVolume / session.MaxVolume * halfW));
                 bool inVA = kvp.Key >= session.VAL && kvp.Key <= session.VAH;
                 context.FillRectangle(
-                    ApplyOpacity(inVA ? CorVolumePerfil : CorForaValueArea),
+                    ApplyOpacity(inVA ? cfg.CorInVA : cfg.CorOutVA),
                     new Rectangle(centerX, yTop, volW, barH));
 
-                // Lado esquerdo: |delta|, cor indica dominância
                 int   deltaW = Math.Max(1, (int)(Math.Abs(data.Delta) / maxAbsDelta * halfW));
-                Color deltaC = ApplyOpacity(data.Delta >= 0 ? CorAsk : CorBid);
+                Color deltaC = ApplyOpacity(data.Delta >= 0 ? cfg.CorAsk : cfg.CorBid);
                 context.FillRectangle(deltaC,
                     new Rectangle(centerX - deltaW, yTop, deltaW, barH));
             }
