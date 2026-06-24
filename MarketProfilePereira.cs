@@ -1104,8 +1104,19 @@ namespace ATAS.Indicators.Custom
                         : (inVA ? CorTPO : CorTPOForaVA);
 
                     int blockX = x1 + i * cellW;
+                    int cellDraw = Math.Max(1, cellW - 1);
                     context.FillRectangle(ApplyOpacity(col),
-                        new Rectangle(blockX, yTop, Math.Max(1, cellW - 1), barH));
+                        new Rectangle(blockX, yTop, cellDraw, barH));
+
+                    // Draw letter when cells are large enough to be readable
+                    if (cellW >= 8 && barH >= 7)
+                    {
+                        string letter = GetTpoLetter(i);
+                        float  fs     = Math.Max(5f, Math.Min(cellW - 2f, barH - 1f));
+                        var    lFont  = new RenderFont("Arial", fs);
+                        context.DrawString(letter, lFont, Color.FromArgb(190, 0, 0, 0),
+                            new Rectangle(blockX + 1, yTop, cellDraw - 1, barH));
+                    }
                 }
 
                 // Single-print marker: thin stripe to the right of all blocks
@@ -1150,7 +1161,7 @@ namespace ATAS.Indicators.Custom
                     // Price-position rainbow: high price → hue 0 (red), low price → hue 240 (blue)
                     float t   = priceRange > 0 ? (float)((price - minPrice) / priceRange) : 0.5f;
                     float hue = (1f - t) * 240f;
-                    col = ApplyOpacity(HsvToColor(hue, 0.85f, 0.90f));
+                    col = ApplyOpacity(HsvToColor(hue, 1.0f, 1.0f));
                 }
 
                 context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
@@ -1172,6 +1183,13 @@ namespace ATAS.Indicators.Custom
         {
             double minutes = (barTime - sessionStart).TotalMinutes;
             return (int)Math.Max(0, Math.Floor(minutes / _tpoSubPeriodMinutes));
+        }
+
+        // Maps sub-period index to standard TPO letter: 0=A … 25=Z, 26=a … 51=z, then wraps.
+        private static string GetTpoLetter(int index)
+        {
+            const string letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+            return letters[index % letters.Length].ToString();
         }
 
 
