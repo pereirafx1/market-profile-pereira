@@ -1120,13 +1120,15 @@ namespace ATAS.Indicators.Custom
                         new Rectangle(blockX, yTop, cellDraw, barH));
 
                     // Draw letter only when "BlocosELetras" mode is active and cell is readable
-                    if (TpoDrawingMode == TpoDrawingMode.BlocosELetras && cellW >= 6 && barH >= 5)
+                    if (TpoDrawingMode == TpoDrawingMode.BlocosELetras && cellW >= 6)
                     {
                         string letter = GetTpoLetter(i);
-                        float  fs     = Math.Max(5f, Math.Min(12f, Math.Min((float)(cellW - 1), (float)barH)));
-                        var    lFont  = new RenderFont("Arial", fs);
+                        // Font sized by cell WIDTH (not height) so thin rows still show letters
+                        float fs    = Math.Max(6f, Math.Min(14f, (float)(cellW - 1)));
+                        var   lFont = new RenderFont("Arial", fs);
+                        // Give the rect enough height for the glyph even if barH is tiny
                         context.DrawString(letter, lFont, CorTextoBlocos,
-                            new Rectangle(blockX, yTop, cellW, Math.Max(barH, (int)fs + 1)));
+                            new Rectangle(blockX, yTop, cellW, Math.Max(barH, (int)fs + 2)));
                     }
                 }
 
