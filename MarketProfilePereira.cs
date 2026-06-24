@@ -59,6 +59,8 @@ namespace ATAS.Indicators.Custom
 
     public enum TpoShape { PorPeriodo, Histograma }
 
+    public enum TpoDrawingMode { Blocos, BlocosELetras }
+
     public enum ProfilePosition { SobreCandles, AncoraDireita }
 
     // =========================================================================
@@ -332,9 +334,14 @@ namespace ATAS.Indicators.Custom
                  GroupName = "TPO", Order = 62)]
         public TpoShape TpoShape { get; set; } = TpoShape.PorPeriodo;
 
+        [Display(Name = "Modo de desenho",
+                 Description = "Blocos = apenas blocos coloridos. BlocosELetras = mostra a letra do sub-período dentro de cada bloco (igual ao ATAS nativo).",
+                 GroupName = "TPO", Order = 63)]
+        public TpoDrawingMode TpoDrawingMode { get; set; } = TpoDrawingMode.Blocos;
+
         [Display(Name = "Mostrar single prints",
                  Description = "Destaca os níveis de preço tocados por apenas 1 sub-período.",
-                 GroupName = "TPO", Order = 63)]
+                 GroupName = "TPO", Order = 64)]
         public bool MostrarSinglePrints { get; set; } = false;
 
         // --- Colors — TPO ---
@@ -350,6 +357,10 @@ namespace ATAS.Indicators.Custom
         [Display(Name = "Cor dos single prints",
                  GroupName = "Colors — TPO", Order = 72)]
         public Color CorSinglePrint { get; set; } = Color.FromArgb(220, 255, 220, 80);
+
+        [Display(Name = "Cor do texto nos blocos  (modo BlocosELetras)",
+                 GroupName = "Colors — TPO", Order = 73)]
+        public Color CorTextoBlocos { get; set; } = Color.FromArgb(255, 0, 0, 0);
 
         // =====================================================================
         //  Estado interno
@@ -1108,13 +1119,13 @@ namespace ATAS.Indicators.Custom
                     context.FillRectangle(ApplyOpacity(col),
                         new Rectangle(blockX, yTop, cellDraw, barH));
 
-                    // Draw letter when cells are large enough to be readable
-                    if (cellW >= 7 && barH >= 5)
+                    // Draw letter only when "BlocosELetras" mode is active and cell is readable
+                    if (TpoDrawingMode == TpoDrawingMode.BlocosELetras && cellW >= 6 && barH >= 5)
                     {
                         string letter = GetTpoLetter(i);
                         float  fs     = Math.Max(5f, Math.Min(12f, Math.Min((float)(cellW - 1), (float)barH)));
                         var    lFont  = new RenderFont("Arial", fs);
-                        context.DrawString(letter, lFont, Color.FromArgb(200, 0, 0, 0),
+                        context.DrawString(letter, lFont, CorTextoBlocos,
                             new Rectangle(blockX, yTop, cellW, Math.Max(barH, (int)fs + 1)));
                     }
                 }
