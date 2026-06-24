@@ -1037,7 +1037,7 @@ namespace ATAS.Indicators.Custom
             }
             else
             {
-                int centerX = x1 + totalWidth / 2;
+                int centerX = x1 + (x2 - x1) / 2;
                 DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick);
                 levelX1 = centerX;
                 levelX2 = x2;
@@ -1114,8 +1114,6 @@ namespace ATAS.Indicators.Custom
             return (int)Math.Max(0, Math.Floor(minutes / _tpoSubPeriodMinutes));
         }
 
-        private static readonly string _tpoLetters =
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
         private static Color[] BuildTpoPalette(int count)
         {
