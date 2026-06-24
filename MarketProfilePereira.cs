@@ -57,6 +57,8 @@ namespace ATAS.Indicators.Custom
 
     public enum TpoColorMode { PorLetra, PorValueArea }
 
+    public enum ProfilePosition { SobreCandles, AncoraDireita }
+
     // =========================================================================
     //  Classe principal
     // =========================================================================
@@ -168,6 +170,11 @@ namespace ATAS.Indicators.Custom
                  Description = "Aplica-se a todas as barras, linhas e zonas do profile.",
                  GroupName = "Profile", Order = 4)]
         public int ProfileOpacity { get; set; } = 80;
+
+        [Display(Name = "Posição",
+                 Description = "SobreCandles = profile desenhado sobre as candles da sessão. AncoraDireita = profile à direita da sessão (estilo Market Profile clássico).",
+                 GroupName = "Profile", Order = 5)]
+        public ProfilePosition ProfilePosition { get; set; } = ProfilePosition.SobreCandles;
 
         // --- Sessions ---
 
@@ -494,7 +501,7 @@ namespace ATAS.Indicators.Custom
             if (_currentSession == null) return;
             if (!_currentSession.MetricsValid)
                 ComputeMetrics(_currentSession);
-            if (_currentSession.PriceLevels.Count > 0)
+            if (HasData(_currentSession))
             {
                 _sessions.Add(_currentSession);
                 // Guardar um buffer generoso para que o scroll histórico ainda tenha dados.
@@ -641,6 +648,9 @@ namespace ATAS.Indicators.Custom
             session.LastBarContrib  = contrib;
             session.LastBarSubPeriod = subPeriodIdx;
         }
+
+        private static bool HasData(ProfileSession session)
+            => session.PriceLevels.Count > 0 || session.TpoPeriodsByIndex.Count > 0;
 
         // Move the live bar's TPO prices into the permanent set when the bar closes.
         private static void SealLiveBar(ProfileSession session)
@@ -905,9 +915,8 @@ namespace ATAS.Indicators.Custom
 
             // Colecionar sessões a renderizar (históricas + actual)
             var toRender = new List<ProfileSession>(_sessions);
-            if (_currentSession != null && _currentSession.PriceLevels.Count > 0)
+            if (_currentSession != null && HasData(_currentSession))
             {
-                // Forçar cálculo de métricas se ainda não foi feito
                 if (!_currentSession.MetricsValid)
                     ComputeMetrics(_currentSession);
                 toRender.Add(_currentSession);
@@ -915,7 +924,7 @@ namespace ATAS.Indicators.Custom
 
             foreach (var s in toRender)
             {
-                if (!s.MetricsValid || s.PriceLevels.Count == 0) continue;
+                if (!s.MetricsValid || !HasData(s)) continue;
                 DrawSession(context, s);
             }
         }
@@ -934,70 +943,79 @@ namespace ATAS.Indicators.Custom
             int viewRight = region.Right;
             if (viewRight <= viewLeft) return;
 
-            // GetBarX devolve 0 para barras fora do ecrã (qualquer lado).
-            // Em vez de estimar firstVisible (que falha quando as barras são sub-pixel),
-            // determinamos x1/x2 directamente a partir dos X reais dos extremos da sessão.
-            int xStart = GetBarX(session.StartBar);
-            int xEnd   = GetBarX(session.EndBar);
+            int x1, x2, profileMaxW;
 
-            int x1, x2;
+            if (ProfilePosition == ProfilePosition.AncoraDireita)
+            {
+                // Profile anchored at the right edge of the session, extending further right.
+                // EndBar visible   → anchor at its exact X
+                // EndBar > screen  → live session scrolled back → anchor at viewRight
+                // EndBar < screen  → entire session is off-screen left → skip
+                int anchorX;
+                if (session.EndBar > LastVisibleBarNumber)
+                    anchorX = viewRight;                       // live session scrolled back
+                else if (session.EndBar < FirstVisibleBarNumber)
+                    return;                                    // entirely off-screen left
+                else
+                {
+                    anchorX = GetBarX(session.EndBar);
+                    if (anchorX == 0) anchorX = viewRight;    // safety fallback
+                }
 
-            if (xStart != 0 && xEnd != 0)
-            {
-                // Ambos os extremos estão no ecrã — posições exactas.
-                x1 = Math.Min(xStart, xEnd);
-                x2 = Math.Max(xStart, xEnd);
-            }
-            else if (xStart == 0 && xEnd != 0)
-            {
-                // Início fora do ecrã à esquerda; fim visível — cortar à borda esquerda.
-                x1 = viewLeft;
-                x2 = xEnd;
-            }
-            else if (xStart != 0)   // xEnd == 0
-            {
-                // Início visível; fim fora do ecrã à direita — cortar à borda direita.
-                x1 = xStart;
-                x2 = viewRight;
+                profileMaxW = Math.Max(2, (viewRight - viewLeft) * MaxWidthPercent / 100);
+                x1 = Math.Max(viewLeft, anchorX);
+                x2 = Math.Min(viewRight, x1 + profileMaxW);
+                if (x1 >= x2) return;
             }
             else
             {
-                // Ambos fora do ecrã. Dois casos:
-                //   A) Sessão abrange o viewport (StartBar fora à esq., EndBar fora à dir.) → largura total.
-                //   B) Sessão completamente fora do viewport → não desenhar.
-                //
-                // As 15 amostras uniformes (k/16) cobrem o intervalo [range/16 .. range*15/16].
-                // Ficam sem cobertura o primeiro e o último 1/16 da sessão: quando o viewport
-                // está nessa zona (ex.: últimas barras de um Daily a muito zoom), todos os 15
-                // pontos ficam fora do ecrã e a sessão parece invisível.
-                //
-                // Solução: combinar amostras próximas dos extremos (fecha as lacunas)
-                // com as 15 amostras interiores (cobre a parte central).
-                int range = session.EndBar - session.StartBar;
-                if (range <= 0) return;
-                bool found = false;
-                int margin = Math.Max(1, range / 16 + 1); // cobre exatamente a lacuna de cada extremo
+                // SobreCandles: profile overlaid on the session's candles.
+                // GetBarX devolve 0 para barras fora do ecrã (qualquer lado).
+                int xStart = GetBarX(session.StartBar);
+                int xEnd   = GetBarX(session.EndBar);
 
-                // Verificação junto aos extremos (fecha o 1/16 inicial e o 1/16 final)
-                for (int d = 1; d <= margin && !found; d++)
-                    found = GetBarX(session.StartBar + d) != 0 ||
-                            GetBarX(session.EndBar   - d) != 0;
+                int rawX1, rawX2;
+                if (xStart != 0 && xEnd != 0)
+                {
+                    rawX1 = Math.Min(xStart, xEnd);
+                    rawX2 = Math.Max(xStart, xEnd);
+                }
+                else if (xStart == 0 && xEnd != 0)
+                {
+                    rawX1 = viewLeft;
+                    rawX2 = xEnd;
+                }
+                else if (xStart != 0)   // xEnd == 0
+                {
+                    rawX1 = xStart;
+                    rawX2 = viewRight;
+                }
+                else
+                {
+                    int range = session.EndBar - session.StartBar;
+                    if (range <= 0) return;
+                    bool found = false;
+                    int margin = Math.Max(1, range / 16 + 1);
 
-                // Amostras uniformes no interior (cobre os 14/16 centrais)
-                for (int k = 1; k <= 15 && !found; k++)
-                    found = GetBarX(session.StartBar + (int)((long)range * k / 16)) != 0;
+                    for (int d = 1; d <= margin && !found; d++)
+                        found = GetBarX(session.StartBar + d) != 0 ||
+                                GetBarX(session.EndBar   - d) != 0;
 
-                if (!found) return;
-                x1 = viewLeft;
-                x2 = viewRight;
+                    for (int k = 1; k <= 15 && !found; k++)
+                        found = GetBarX(session.StartBar + (int)((long)range * k / 16)) != 0;
+
+                    if (!found) return;
+                    rawX1 = viewLeft;
+                    rawX2 = viewRight;
+                }
+
+                x1 = Math.Max(rawX1, viewLeft);
+                x2 = Math.Min(rawX2, viewRight);
+                if (x1 >= x2) return;
+
+                int totalWidth = Math.Max(2, x2 - x1);
+                profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
             }
-
-            x1 = Math.Max(x1, viewLeft);
-            x2 = Math.Min(x2, viewRight);
-            if (x1 >= x2) return;
-
-            int totalWidth  = Math.Max(2, x2 - x1);
-            int profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
 
             // x-range para linhas de nível (POC, VAH, VAL):
             //   Volume / TPO → cobre a largura das barras (x1 … x1+profileMaxW)
