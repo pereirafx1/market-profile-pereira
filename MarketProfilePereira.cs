@@ -28,7 +28,7 @@ namespace ATAS.Indicators.Custom
 
     public enum PositionMode  { Manual, Automatico }
 
-    public enum ProfileType   { Volume, VolumeDelta }
+    public enum ProfileType   { Volume, VolumeDelta, TPO }
 
     public enum SessionPreset
     {
@@ -71,6 +71,7 @@ namespace ATAS.Indicators.Custom
             public decimal TotalVolume;
             public decimal BidVolume;
             public decimal AskVolume;
+            public int     TpoCount;
             public decimal Delta => AskVolume - BidVolume;
         }
 
@@ -91,6 +92,11 @@ namespace ATAS.Indicators.Custom
             public decimal MaxVolume;
             public decimal TotalVolume;
             public decimal TotalDelta;
+            public int     MaxTpoCount;
+            public int     TotalTpoCount;
+            public decimal TpoPOC;
+            public decimal TpoVAH;
+            public decimal TpoVAL;
             public bool    MetricsValid;
 
             // Snapshot da contribuição da última candle (para recalc no tick ao vivo)
@@ -272,6 +278,16 @@ namespace ATAS.Indicators.Custom
         [Display(Name = "Delta positivo (dominância Ask)",
                  GroupName = "Colors — Delta", Order = 51)]
         public Color CorAsk { get; set; } = Color.FromArgb(200, 0, 200, 60);
+
+        // --- Colors — TPO ---
+
+        [Display(Name = "TPO dentro da Value Area",
+                 GroupName = "Colors — TPO", Order = 60)]
+        public Color CorTPO { get; set; } = Color.FromArgb(200, 0, 150, 255);
+
+        [Display(Name = "TPO fora da Value Area",
+                 GroupName = "Colors — TPO", Order = 61)]
+        public Color CorTPOForaVA { get; set; } = Color.FromArgb(200, 0, 80, 180);
 
         // =====================================================================
         //  Estado interno
@@ -535,36 +551,33 @@ namespace ATAS.Indicators.Custom
 
             for (decimal price = candle.Low; price <= candle.High + tick * 0.001m; price += tick)
             {
-                decimal p   = RoundToTick(price, tick);
-                var     pvi = candle.GetPriceVolumeInfo(p);
-                if (pvi == null) continue;
+                decimal p = RoundToTick(price, tick);
 
+                // TPO: every price level between Low and High gets +1 touch
+                if (!session.PriceLevels.TryGetValue(p, out var lvl))
+                { lvl = new PriceLevelData(); session.PriceLevels[p] = lvl; }
+                if (!contrib.TryGetValue(p, out var snap))
+                { snap = new PriceLevelData(); contrib[p] = snap; }
+                lvl.TpoCount++;
+                snap.TpoCount++;
+
+                // Volume: only where actual trade data exists at this tick
+                var pvi = candle.GetPriceVolumeInfo(p);
+                if (pvi == null) continue;
                 decimal ask = Math.Max(0m, pvi.Ask);
                 decimal bid = Math.Max(0m, pvi.Bid);
                 decimal tot = ask + bid;
                 if (tot <= 0) continue;
 
-                AccumulateLevel(session, contrib, p, ask, bid, tot);
+                lvl.AskVolume   += ask;
+                lvl.BidVolume   += bid;
+                lvl.TotalVolume += tot;
+                snap.AskVolume  += ask;
+                snap.BidVolume  += bid;
+                snap.TotalVolume += tot;
             }
 
             session.LastBarContrib = contrib;
-        }
-
-        private static void AccumulateLevel(ProfileSession session,
-                                            Dictionary<decimal, PriceLevelData> contrib,
-                                            decimal price, decimal ask, decimal bid, decimal total)
-        {
-            if (!session.PriceLevels.TryGetValue(price, out var lvl))
-            { lvl = new PriceLevelData(); session.PriceLevels[price] = lvl; }
-            lvl.AskVolume   += ask;
-            lvl.BidVolume   += bid;
-            lvl.TotalVolume += total;
-
-            if (!contrib.TryGetValue(price, out var snap))
-            { snap = new PriceLevelData(); contrib[price] = snap; }
-            snap.AskVolume   += ask;
-            snap.BidVolume   += bid;
-            snap.TotalVolume += total;
         }
 
         private static void SubtractContrib(
@@ -578,7 +591,8 @@ namespace ATAS.Indicators.Custom
                 lvl.AskVolume   -= kvp.Value.AskVolume;
                 lvl.BidVolume   -= kvp.Value.BidVolume;
                 lvl.TotalVolume -= kvp.Value.TotalVolume;
-                if (lvl.TotalVolume <= 0)
+                lvl.TpoCount    -= kvp.Value.TpoCount;
+                if (lvl.TotalVolume <= 0 && lvl.TpoCount <= 0)
                     session.PriceLevels.Remove(kvp.Key);
             }
         }
@@ -612,7 +626,21 @@ namespace ATAS.Indicators.Custom
                 totDelta += kvp.Value.Delta;
             session.TotalDelta = totDelta;
 
+            // TPO: conta de candles por nível e métricas derivadas
+            int maxTpo = 0, totTpo = 0;
+            decimal tpoPoc = 0m;
+            foreach (var kvp in session.PriceLevels)
+            {
+                int t = kvp.Value.TpoCount;
+                totTpo += t;
+                if (t > maxTpo) { maxTpo = t; tpoPoc = kvp.Key; }
+            }
+            session.MaxTpoCount   = maxTpo;
+            session.TotalTpoCount = totTpo;
+            session.TpoPOC        = tpoPoc;
+
             ComputeValueArea(session);
+            ComputeTpoValueArea(session);
             FindSecondaryPOCs(session);
         }
 
@@ -649,6 +677,39 @@ namespace ATAS.Indicators.Custom
 
             session.VAL = levels[lo].Key;
             session.VAH = levels[hi].Key;
+        }
+
+        private void ComputeTpoValueArea(ProfileSession session)
+        {
+            session.TpoVAL = session.TpoPOC;
+            session.TpoVAH = session.TpoPOC;
+
+            var levels = session.PriceLevels.ToList();
+            int n = levels.Count;
+            if (n == 0 || session.TotalTpoCount == 0) return;
+
+            int pocIdx = levels.FindIndex(kvp => kvp.Key == session.TpoPOC);
+            if (pocIdx < 0) return;
+
+            int target      = (int)(session.TotalTpoCount * (VAPercent / 100m));
+            int accumulated = levels[pocIdx].Value.TpoCount;
+            int lo = pocIdx, hi = pocIdx;
+
+            while (accumulated < target)
+            {
+                int below = (lo > 0)     ? levels[lo - 1].Value.TpoCount : -1;
+                int above = (hi < n - 1) ? levels[hi + 1].Value.TpoCount : -1;
+
+                if (below < 0 && above < 0) break;
+
+                if (above >= below)
+                    accumulated += levels[++hi].Value.TpoCount;
+                else
+                    accumulated += levels[--lo].Value.TpoCount;
+            }
+
+            session.TpoVAL = levels[lo].Key;
+            session.TpoVAH = levels[hi].Key;
         }
 
         private void FindSecondaryPOCs(ProfileSession session)
@@ -830,7 +891,7 @@ namespace ATAS.Indicators.Custom
             int profileMaxW = Math.Max(2, totalWidth * MaxWidthPercent / 100);
 
             // x-range para linhas de nível (POC, VAH, VAL):
-            //   Volume       → cobre a largura das barras (x1 … x1+profileMaxW)
+            //   Volume / TPO → cobre a largura das barras (x1 … x1+profileMaxW)
             //   Volume+Delta → apenas lado direito / volume (centerX … x2)
             int levelX1, levelX2;
             if (ProfileType == ProfileType.Volume)
@@ -838,6 +899,14 @@ namespace ATAS.Indicators.Custom
                 DrawVolumeProfile(context, session, x1, profileMaxW, tick);
                 levelX1 = x1;
                 levelX2 = x1 + profileMaxW;
+                DrawKeyLevels(context, session, levelX1, levelX2, tick);
+            }
+            else if (ProfileType == ProfileType.TPO)
+            {
+                DrawTPOProfile(context, session, x1, profileMaxW, tick);
+                levelX1 = x1;
+                levelX2 = x1 + profileMaxW;
+                DrawKeyLevelsTpo(context, session, levelX1, levelX2, tick);
             }
             else
             {
@@ -845,10 +914,44 @@ namespace ATAS.Indicators.Custom
                 DrawVolumeDeltaProfile(context, session, x1, x2, profileMaxW, tick);
                 levelX1 = centerX;
                 levelX2 = x2;
+                DrawKeyLevels(context, session, levelX1, levelX2, tick);
             }
-
-            DrawKeyLevels(context, session, levelX1, levelX2, tick);
             DrawTotalDeltaLabel(context, session, x1, x2);
+        }
+
+        // ---------------------------------------------------------------------
+        //  Modo TPO — barras proporcionais ao nº de candles que tocaram o preço
+        // ---------------------------------------------------------------------
+
+        private void DrawTPOProfile(RenderContext context, ProfileSession session,
+                                    int x1, int maxW, decimal tick)
+        {
+            if (session.MaxTpoCount <= 0) return;
+
+            foreach (var kvp in session.PriceLevels)
+            {
+                int tpo = kvp.Value.TpoCount;
+                if (tpo <= 0) continue;
+
+                int barW = Math.Max(1, (int)((long)tpo * maxW / session.MaxTpoCount));
+
+                GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
+
+                bool  inVA = kvp.Key >= session.TpoVAL && kvp.Key <= session.TpoVAH;
+                Color col  = ApplyOpacity(inVA ? CorTPO : CorTPOForaVA);
+
+                context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
+            }
+        }
+
+        private void DrawKeyLevelsTpo(RenderContext context, ProfileSession session,
+                                      int x1, int x2, decimal tick)
+        {
+            DrawHorizontalLevel(context, session.TpoVAH, x1, x2, tick, CorVAH);
+            DrawHorizontalLevel(context, session.TpoVAL, x1, x2, tick, CorVAL);
+
+            int pocY = PriceToY(session.TpoPOC + tick * 0.5m);
+            context.FillRectangle(ApplyOpacity(CorPOC), new Rectangle(x1, pocY - 1, x2 - x1, 2));
         }
 
         // ---------------------------------------------------------------------
