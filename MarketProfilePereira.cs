@@ -55,6 +55,8 @@ namespace ATAS.Indicators.Custom
 
     public enum ProfileLayer { PorTras, PorCima }
 
+    public enum TpoColorMode { PorLetra, PorValueArea }
+
     // =========================================================================
     //  Classe principal
     // =========================================================================
@@ -71,8 +73,19 @@ namespace ATAS.Indicators.Custom
             public decimal TotalVolume;
             public decimal BidVolume;
             public decimal AskVolume;
-            public int     TpoCount;
             public decimal Delta => AskVolume - BidVolume;
+        }
+
+        // Represents one TPO sub-period (e.g. 30 min) within a session.
+        private sealed class TpoPeriod
+        {
+            public int      Index;       // 0-based; determines letter (A, B, C…)
+            public DateTime PeriodStart;
+            public readonly HashSet<decimal> Prices     = new HashSet<decimal>(); // closed-bar prices
+            public          HashSet<decimal> LivePrices = null;                    // live-bar prices only
+
+            public bool ContainsPrice(decimal p)
+                => Prices.Contains(p) || (LivePrices != null && LivePrices.Contains(p));
         }
 
         private sealed class ProfileSession
@@ -92,12 +105,20 @@ namespace ATAS.Indicators.Custom
             public decimal MaxVolume;
             public decimal TotalVolume;
             public decimal TotalDelta;
+            public bool    MetricsValid;
+
+            // TPO sub-periods (one entry per distinct sub-period that has been touched)
+            public readonly SortedDictionary<int, TpoPeriod> TpoPeriodsByIndex
+                = new SortedDictionary<int, TpoPeriod>();
+            public int LastBarSubPeriod = -1;
+
+            // Computed in ComputeMetrics: price → number of sub-periods that touched it
+            public Dictionary<decimal, int> TpoPriceCount;
             public int     MaxTpoCount;
             public int     TotalTpoCount;
             public decimal TpoPOC;
             public decimal TpoVAH;
             public decimal TpoVAL;
-            public bool    MetricsValid;
 
             // Snapshot da contribuição da última candle (para recalc no tick ao vivo)
             public Dictionary<decimal, PriceLevelData> LastBarContrib;
@@ -281,27 +302,55 @@ namespace ATAS.Indicators.Custom
 
         // --- Colors — TPO ---
 
-        [Display(Name = "TPO dentro da Value Area",
-                 GroupName = "Colors — TPO", Order = 60)]
+        // --- TPO ---
+
+        [Display(Name = "Sub-período (minutos)",
+                 Description = "Duração de cada letra TPO. Ex.: 30 = cada 30 min recebe uma letra.",
+                 GroupName = "TPO", Order = 60)]
+        public int TpoSubPeriodMinutes
+        {
+            get => _tpoSubPeriodMinutes;
+            set { _tpoSubPeriodMinutes = Math.Max(1, value); RecalculateValues(); }
+        }
+
+        [Display(Name = "Modo de cor",
+                 Description = "PorLetra = cada sub-período tem cor própria (arco-íris). PorValueArea = duas cores (dentro/fora da VA).",
+                 GroupName = "TPO", Order = 61)]
+        public TpoColorMode TpoColorMode { get; set; } = TpoColorMode.PorLetra;
+
+        [Display(Name = "Mostrar single prints",
+                 Description = "Destaca os níveis de preço tocados por apenas 1 sub-período.",
+                 GroupName = "TPO", Order = 62)]
+        public bool MostrarSinglePrints { get; set; } = false;
+
+        // --- Colors — TPO ---
+
+        [Display(Name = "TPO dentro da Value Area  (modo PorValueArea)",
+                 GroupName = "Colors — TPO", Order = 70)]
         public Color CorTPO { get; set; } = Color.FromArgb(200, 0, 150, 255);
 
-        [Display(Name = "TPO fora da Value Area",
-                 GroupName = "Colors — TPO", Order = 61)]
+        [Display(Name = "TPO fora da Value Area  (modo PorValueArea)",
+                 GroupName = "Colors — TPO", Order = 71)]
         public Color CorTPOForaVA { get; set; } = Color.FromArgb(200, 0, 80, 180);
+
+        [Display(Name = "Cor dos single prints",
+                 GroupName = "Colors — TPO", Order = 72)]
+        public Color CorSinglePrint { get; set; } = Color.FromArgb(220, 255, 220, 80);
 
         // =====================================================================
         //  Estado interno
         // =====================================================================
 
         // Backing fields para propriedades que forçam RecalculateValues()
-        private ProfileLayer   _profileLayer   = ProfileLayer.PorTras;
-        private ProfileType    _profileType    = ProfileType.Volume;
-        private SessionPreset  _session        = SessionPreset.NewYork;
-        private CustomTZ       _customTimezone = CustomTZ.NewYork;
-        private string         _customStart    = "09:30";
-        private string         _customEnd      = "16:00";
-        private int            _sessionsToShow = 3;
-        private decimal        _vaPercent      = 70m;
+        private ProfileLayer   _profileLayer          = ProfileLayer.PorTras;
+        private ProfileType    _profileType           = ProfileType.Volume;
+        private SessionPreset  _session               = SessionPreset.NewYork;
+        private CustomTZ       _customTimezone        = CustomTZ.NewYork;
+        private string         _customStart           = "09:30";
+        private string         _customEnd             = "16:00";
+        private int            _sessionsToShow        = 3;
+        private decimal        _vaPercent             = 70m;
+        private int            _tpoSubPeriodMinutes   = 30;
 
         private readonly List<ProfileSession> _sessions     = new List<ProfileSession>();
         private          ProfileSession       _currentSession;
@@ -409,14 +458,16 @@ namespace ATAS.Indicators.Custom
 
                 if (bar > _currentSession.LastBarAdded)
                 {
-                    // Nova candle fechada: acumular de forma incremental
+                    // New bar: seal previous live bar's TPO contribution, then accumulate new bar
+                    if (_currentSession.LastBarAdded >= 0)
+                        SealLiveBar(_currentSession);
                     AddBarToSession(_currentSession, bar);
                     _currentSession.LastBarAdded = bar;
                     _currentSession.MetricsValid = false;
                 }
                 else if (isLive)
                 {
-                    // Tick ao vivo na candle actual: retirar contribuição anterior e re-adicionar
+                    // Live tick: subtract previous contribution and re-add with updated data
                     SubtractContrib(_currentSession, _currentSession.LastBarContrib);
                     AddBarToSession(_currentSession, bar);
                     _currentSession.MetricsValid = false;
@@ -544,40 +595,62 @@ namespace ATAS.Indicators.Custom
             var candle = GetCandle(bar);
             if (candle == null) return;
 
-            decimal tick = InstrumentInfo.TickSize;
+            bool    isLive = (bar == CurrentBar - 1);
+            decimal tick   = InstrumentInfo.TickSize;
             if (tick <= 0) tick = 0.01m;
 
-            var contrib = new Dictionary<decimal, PriceLevelData>();
+            int subPeriodIdx = GetTpoSubPeriodIndex(candle.Time, session.StartTime);
+            var tpoPrices    = new HashSet<decimal>();
+            var contrib      = new Dictionary<decimal, PriceLevelData>();
 
             for (decimal price = candle.Low; price <= candle.High + tick * 0.001m; price += tick)
             {
                 decimal p = RoundToTick(price, tick);
+                tpoPrices.Add(p);
 
-                // TPO: every price level between Low and High gets +1 touch
-                if (!session.PriceLevels.TryGetValue(p, out var lvl))
-                { lvl = new PriceLevelData(); session.PriceLevels[p] = lvl; }
-                if (!contrib.TryGetValue(p, out var snap))
-                { snap = new PriceLevelData(); contrib[p] = snap; }
-                lvl.TpoCount++;
-                snap.TpoCount++;
-
-                // Volume: only where actual trade data exists at this tick
+                // Volume: accumulate only where trade data exists
                 var pvi = candle.GetPriceVolumeInfo(p);
-                if (pvi == null) continue;
-                decimal ask = Math.Max(0m, pvi.Ask);
-                decimal bid = Math.Max(0m, pvi.Bid);
-                decimal tot = ask + bid;
-                if (tot <= 0) continue;
-
-                lvl.AskVolume   += ask;
-                lvl.BidVolume   += bid;
-                lvl.TotalVolume += tot;
-                snap.AskVolume  += ask;
-                snap.BidVolume  += bid;
-                snap.TotalVolume += tot;
+                if (pvi != null)
+                {
+                    decimal ask = Math.Max(0m, pvi.Ask);
+                    decimal bid = Math.Max(0m, pvi.Bid);
+                    decimal tot = ask + bid;
+                    if (tot > 0)
+                    {
+                        if (!session.PriceLevels.TryGetValue(p, out var lvl))
+                        { lvl = new PriceLevelData(); session.PriceLevels[p] = lvl; }
+                        if (!contrib.TryGetValue(p, out var snap))
+                        { snap = new PriceLevelData(); contrib[p] = snap; }
+                        lvl.AskVolume   += ask; lvl.BidVolume   += bid; lvl.TotalVolume += tot;
+                        snap.AskVolume  += ask; snap.BidVolume  += bid; snap.TotalVolume += tot;
+                    }
+                }
             }
 
-            session.LastBarContrib = contrib;
+            // TPO sub-period: track which prices each period touches
+            if (!session.TpoPeriodsByIndex.TryGetValue(subPeriodIdx, out var tpoPeriod))
+            {
+                tpoPeriod = new TpoPeriod { Index = subPeriodIdx, PeriodStart = candle.Time };
+                session.TpoPeriodsByIndex[subPeriodIdx] = tpoPeriod;
+            }
+            if (isLive)
+                tpoPeriod.LivePrices = tpoPrices;           // replaced each live tick
+            else
+                tpoPeriod.Prices.UnionWith(tpoPrices);      // permanent accumulation
+
+            session.LastBarContrib  = contrib;
+            session.LastBarSubPeriod = subPeriodIdx;
+        }
+
+        // Move the live bar's TPO prices into the permanent set when the bar closes.
+        private static void SealLiveBar(ProfileSession session)
+        {
+            int idx = session.LastBarSubPeriod;
+            if (idx >= 0 && session.TpoPeriodsByIndex.TryGetValue(idx, out var p) && p.LivePrices != null)
+            {
+                p.Prices.UnionWith(p.LivePrices);
+                p.LivePrices = null;
+            }
         }
 
         private static void SubtractContrib(
@@ -585,16 +658,22 @@ namespace ATAS.Indicators.Custom
             Dictionary<decimal, PriceLevelData> contrib)
         {
             if (contrib == null) return;
+
+            // Volume subtraction
             foreach (var kvp in contrib)
             {
                 if (!session.PriceLevels.TryGetValue(kvp.Key, out var lvl)) continue;
                 lvl.AskVolume   -= kvp.Value.AskVolume;
                 lvl.BidVolume   -= kvp.Value.BidVolume;
                 lvl.TotalVolume -= kvp.Value.TotalVolume;
-                lvl.TpoCount    -= kvp.Value.TpoCount;
-                if (lvl.TotalVolume <= 0 && lvl.TpoCount <= 0)
+                if (lvl.TotalVolume <= 0)
                     session.PriceLevels.Remove(kvp.Key);
             }
+
+            // TPO: clear live prices from the live period (other periods are unaffected)
+            int idx = session.LastBarSubPeriod;
+            if (idx >= 0 && session.TpoPeriodsByIndex.TryGetValue(idx, out var period))
+                period.LivePrices = null;
         }
 
         // =====================================================================
@@ -604,36 +683,62 @@ namespace ATAS.Indicators.Custom
         private void ComputeMetrics(ProfileSession session)
         {
             session.MetricsValid = true;
-            if (session.PriceLevels.Count == 0) return;
+            bool hasVolume = session.PriceLevels.Count > 0;
+            bool hasTpo    = session.TpoPeriodsByIndex.Count > 0;
+            if (!hasVolume && !hasTpo) return;
 
-            // POC e volume total
-            decimal maxVol = 0m, totVol = 0m, poc = 0m;
-            foreach (var kvp in session.PriceLevels)
+            // POC e volume total (only when there is volume data)
+            if (hasVolume)
             {
-                totVol += kvp.Value.TotalVolume;
-                if (kvp.Value.TotalVolume > maxVol)
+                decimal maxVol = 0m, totVol = 0m, poc = 0m;
+                foreach (var kvp in session.PriceLevels)
                 {
-                    maxVol = kvp.Value.TotalVolume;
-                    poc    = kvp.Key;
+                    totVol += kvp.Value.TotalVolume;
+                    if (kvp.Value.TotalVolume > maxVol)
+                    {
+                        maxVol = kvp.Value.TotalVolume;
+                        poc    = kvp.Key;
+                    }
+                }
+                session.MaxVolume   = maxVol;
+                session.TotalVolume = totVol;
+                session.POC         = poc;
+
+                decimal totDelta = 0m;
+                foreach (var kvp in session.PriceLevels)
+                    totDelta += kvp.Value.Delta;
+                session.TotalDelta = totDelta;
+            }
+
+            // TPO: count distinct sub-periods per price, derive POC and VA
+            var priceCount = new Dictionary<decimal, int>();
+            foreach (var period in session.TpoPeriodsByIndex.Values)
+            {
+                foreach (decimal p in period.Prices)
+                {
+                    priceCount.TryGetValue(p, out int c);
+                    priceCount[p] = c + 1;
+                }
+                if (period.LivePrices != null)
+                {
+                    foreach (decimal p in period.LivePrices)
+                    {
+                        if (!period.Prices.Contains(p))
+                        {
+                            priceCount.TryGetValue(p, out int c);
+                            priceCount[p] = c + 1;
+                        }
+                    }
                 }
             }
-            session.MaxVolume   = maxVol;
-            session.TotalVolume = totVol;
-            session.POC         = poc;
+            session.TpoPriceCount = priceCount;
 
-            decimal totDelta = 0m;
-            foreach (var kvp in session.PriceLevels)
-                totDelta += kvp.Value.Delta;
-            session.TotalDelta = totDelta;
-
-            // TPO: conta de candles por nível e métricas derivadas
             int maxTpo = 0, totTpo = 0;
             decimal tpoPoc = 0m;
-            foreach (var kvp in session.PriceLevels)
+            foreach (var kvp in priceCount)
             {
-                int t = kvp.Value.TpoCount;
-                totTpo += t;
-                if (t > maxTpo) { maxTpo = t; tpoPoc = kvp.Key; }
+                totTpo += kvp.Value;
+                if (kvp.Value > maxTpo) { maxTpo = kvp.Value; tpoPoc = kvp.Key; }
             }
             session.MaxTpoCount   = maxTpo;
             session.TotalTpoCount = totTpo;
@@ -684,28 +789,32 @@ namespace ATAS.Indicators.Custom
             session.TpoVAL = session.TpoPOC;
             session.TpoVAH = session.TpoPOC;
 
-            var levels = session.PriceLevels.ToList();
+            var pc = session.TpoPriceCount;
+            if (pc == null || pc.Count == 0 || session.TotalTpoCount == 0) return;
+
+            // Sort prices ascending (same convention as ComputeValueArea)
+            var levels = pc.OrderBy(kvp => kvp.Key).ToList();
             int n = levels.Count;
-            if (n == 0 || session.TotalTpoCount == 0) return;
+            if (n == 0) return;
 
             int pocIdx = levels.FindIndex(kvp => kvp.Key == session.TpoPOC);
             if (pocIdx < 0) return;
 
             int target      = (int)(session.TotalTpoCount * (VAPercent / 100m));
-            int accumulated = levels[pocIdx].Value.TpoCount;
+            int accumulated = levels[pocIdx].Value;
             int lo = pocIdx, hi = pocIdx;
 
             while (accumulated < target)
             {
-                int below = (lo > 0)     ? levels[lo - 1].Value.TpoCount : -1;
-                int above = (hi < n - 1) ? levels[hi + 1].Value.TpoCount : -1;
+                int below = (lo > 0)     ? levels[lo - 1].Value : -1;
+                int above = (hi < n - 1) ? levels[hi + 1].Value : -1;
 
                 if (below < 0 && above < 0) break;
 
                 if (above >= below)
-                    accumulated += levels[++hi].Value.TpoCount;
+                    accumulated += levels[++hi].Value;
                 else
-                    accumulated += levels[--lo].Value.TpoCount;
+                    accumulated += levels[--lo].Value;
             }
 
             session.TpoVAL = levels[lo].Key;
@@ -920,28 +1029,98 @@ namespace ATAS.Indicators.Custom
         }
 
         // ---------------------------------------------------------------------
-        //  Modo TPO — barras proporcionais ao nº de candles que tocaram o preço
+        //  Modo TPO — uma célula colorida por sub-período que tocou o preço
         // ---------------------------------------------------------------------
 
         private void DrawTPOProfile(RenderContext context, ProfileSession session,
                                     int x1, int maxW, decimal tick)
         {
-            if (session.MaxTpoCount <= 0) return;
+            if (session.TpoPeriodsByIndex.Count == 0) return;
 
-            foreach (var kvp in session.PriceLevels)
+            var orderedPeriods = session.TpoPeriodsByIndex.Values.ToList(); // sorted by key
+            int numPeriods     = orderedPeriods.Count;
+            int cellW          = Math.Max(2, maxW / numPeriods);
+
+            bool    perLetter = TpoColorMode == TpoColorMode.PorLetra;
+            Color[] palette   = perLetter ? BuildTpoPalette(numPeriods) : null;
+
+            // Collect all prices touched by any period (union of Prices + LivePrices)
+            var allPrices = new SortedSet<decimal>();
+            foreach (var p in orderedPeriods)
             {
-                int tpo = kvp.Value.TpoCount;
-                if (tpo <= 0) continue;
-
-                int barW = Math.Max(1, (int)((long)tpo * maxW / session.MaxTpoCount));
-
-                GetLevelRect(kvp.Key, tick, out int yTop, out int barH);
-
-                bool  inVA = kvp.Key >= session.TpoVAL && kvp.Key <= session.TpoVAH;
-                Color col  = ApplyOpacity(inVA ? CorTPO : CorTPOForaVA);
-
-                context.FillRectangle(col, new Rectangle(x1, yTop, barW, barH));
+                allPrices.UnionWith(p.Prices);
+                if (p.LivePrices != null) allPrices.UnionWith(p.LivePrices);
             }
+
+            foreach (decimal price in allPrices)
+            {
+                GetLevelRect(price, tick, out int yTop, out int barH);
+                bool inVA     = price >= session.TpoVAL && price <= session.TpoVAH;
+                int  periods  = 0;
+                bool single   = false;
+                if (session.TpoPriceCount != null)
+                {
+                    session.TpoPriceCount.TryGetValue(price, out periods);
+                    single = MostrarSinglePrints && periods == 1;
+                }
+
+                for (int i = 0; i < orderedPeriods.Count; i++)
+                {
+                    if (!orderedPeriods[i].ContainsPrice(price)) continue;
+
+                    Color col = perLetter
+                        ? palette[i % palette.Length]
+                        : (inVA ? CorTPO : CorTPOForaVA);
+
+                    int blockX = x1 + i * cellW;
+                    context.FillRectangle(ApplyOpacity(col),
+                        new Rectangle(blockX, yTop, Math.Max(1, cellW - 1), barH));
+                }
+
+                // Single-print marker: thin stripe to the right of all blocks
+                if (single)
+                {
+                    context.FillRectangle(ApplyOpacity(CorSinglePrint),
+                        new Rectangle(x1 + numPeriods * cellW + 1, yTop, 3, barH));
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        //  TPO helpers
+        // ─────────────────────────────────────────────────────────────────────
+
+        private int GetTpoSubPeriodIndex(DateTime barTime, DateTime sessionStart)
+        {
+            double minutes = (barTime - sessionStart).TotalMinutes;
+            return (int)Math.Max(0, Math.Floor(minutes / _tpoSubPeriodMinutes));
+        }
+
+        private static readonly string _tpoLetters =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+        private static Color[] BuildTpoPalette(int count)
+        {
+            if (count <= 0) return new[] { Color.Cyan };
+            var palette = new Color[count];
+            for (int i = 0; i < count; i++)
+                palette[i] = HsvToColor(360f * i / count, 0.75f, 0.90f);
+            return palette;
+        }
+
+        private static Color HsvToColor(float h, float s, float v)
+        {
+            float c = v * s;
+            float x = c * (1f - Math.Abs(h / 60f % 2f - 1f));
+            float m = v - c;
+            float r, g, b;
+            if      (h < 60)  { r = c; g = x; b = 0; }
+            else if (h < 120) { r = x; g = c; b = 0; }
+            else if (h < 180) { r = 0; g = c; b = x; }
+            else if (h < 240) { r = 0; g = x; b = c; }
+            else if (h < 300) { r = x; g = 0; b = c; }
+            else              { r = c; g = 0; b = x; }
+            return Color.FromArgb(255, (int)((r + m) * 255), (int)((g + m) * 255), (int)((b + m) * 255));
         }
 
         private void DrawKeyLevelsTpo(RenderContext context, ProfileSession session,
